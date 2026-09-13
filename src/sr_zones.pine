@@ -17,6 +17,7 @@ atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
 zoneMultiplier = input.float(0.2, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
 
 groupLifecycle = "Zone Lifecycle"
+maxBreaks        = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
 staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
 staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
 
@@ -45,6 +46,7 @@ type SRZone
     int lastInteractionBar
     int touchCount
     int reactionScore
+    int breakCount
     box boxId
 
 var zones = array.new<SRZone>()
@@ -65,6 +67,17 @@ pivotBar      = bar_index - rightBars
 
 volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
 atrReady        = not na(pivotATR)
+
+// -----------------------------------------------------------------------------
+// Zone helpers
+// -----------------------------------------------------------------------------
+freezeZone(SRZone zone) =>
+    zone.active := false
+    box.set_extend(zone.boxId, extend.none)
+    box.set_right(zone.boxId, bar_index)
+    box.set_bgcolor(zone.boxId, staleBg)
+    box.set_border_color(zone.boxId, staleBorder)
+    zone
 
 // -----------------------------------------------------------------------------
 // Zone creation
@@ -89,6 +102,7 @@ createSupportZone(float pivotPrice) =>
          true,
          bar_index,
          bar_index,
+         0,
          0,
          0,
          zoneBox)
@@ -117,6 +131,7 @@ createResistanceZone(float pivotPrice) =>
          bar_index,
          0,
          0,
+         0,
          zoneBox)
 
     array.push(zones, zone)
@@ -143,16 +158,24 @@ if array.size(zones) > 0
             if broken
                 // A break is close-confirmed. Wicks beyond the outer boundary
                 // do not flip a zone.
-                zone.isSupport := not zone.isSupport
+                zone.breakCount += 1
                 zone.lastInteractionBar := bar_index
                 zone.reactionScore -= 1
 
-                if zone.isSupport
-                    box.set_bgcolor(zone.boxId, supportBg)
-                    box.set_border_color(zone.boxId, supportBorder)
+                if zone.breakCount >= maxBreaks
+                    // Repeated role reversals indicate that the area is no
+                    // longer behaving as useful support/resistance. Preserve
+                    // it historically, but retire it from active logic.
+                    zone := freezeZone(zone)
                 else
-                    box.set_bgcolor(zone.boxId, resistBg)
-                    box.set_border_color(zone.boxId, resistBorder)
+                    zone.isSupport := not zone.isSupport
+
+                    if zone.isSupport
+                        box.set_bgcolor(zone.boxId, supportBg)
+                        box.set_border_color(zone.boxId, supportBorder)
+                    else
+                        box.set_bgcolor(zone.boxId, resistBg)
+                        box.set_border_color(zone.boxId, resistBorder)
             else
                 // Any overlap with the zone counts as interaction for lifecycle
                 // purposes. Several consecutive candles inside the same zone
@@ -161,18 +184,13 @@ if array.size(zones) > 0
                 if interacting
                     zone.lastInteractionBar := bar_index
 
-            float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
-            bool oldEnough = bar_index - zone.lastInteractionBar > staleBars
-            bool farEnough = not na(currentATR) and distanceFromZone > currentATR * staleDistanceATR
+            if zone.active
+                float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
+                bool oldEnough = bar_index - zone.lastInteractionBar > staleBars
+                bool farEnough = not na(currentATR) and distanceFromZone > currentATR * staleDistanceATR
 
-            if oldEnough and farEnough
-                // Stale zones stay visible as historical structure, but stop
-                // extending and stop participating in lifecycle logic.
-                zone.active := false
-                box.set_extend(zone.boxId, extend.none)
-                box.set_right(zone.boxId, bar_index)
-                box.set_bgcolor(zone.boxId, staleBg)
-                box.set_border_color(zone.boxId, staleBorder)
+                if oldEnough and farEnough
+                    zone := freezeZone(zone)
 
             array.set(zones, i, zone)
 
