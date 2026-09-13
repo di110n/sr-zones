@@ -16,6 +16,23 @@ groupZones = "Initial Zone Geometry"
 atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
 zoneMultiplier = input.float(0.2, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
 
+groupLifecycle = "Zone Lifecycle"
+staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
+staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
+
+// Prototype defaults above are intentionally adjustable. They will be tuned
+// visually after we inspect the lifecycle on real charts.
+
+// -----------------------------------------------------------------------------
+// Visuals
+// -----------------------------------------------------------------------------
+supportBg     = color.new(color.teal, 85)
+supportBorder = color.new(color.teal, 45)
+resistBg      = color.new(color.red, 85)
+resistBorder  = color.new(color.red, 45)
+staleBg       = color.new(color.gray, 90)
+staleBorder   = color.new(color.gray, 65)
+
 // -----------------------------------------------------------------------------
 // Zone model
 // -----------------------------------------------------------------------------
@@ -62,8 +79,8 @@ createSupportZone(float pivotPrice) =>
          bottom = lower,
          xloc = xloc.bar_index,
          extend = extend.right,
-         bgcolor = color.new(color.teal, 85),
-         border_color = color.new(color.teal, 45))
+         bgcolor = supportBg,
+         border_color = supportBorder)
 
     SRZone zone = SRZone.new(
          lower,
@@ -88,8 +105,8 @@ createResistanceZone(float pivotPrice) =>
          bottom = lower,
          xloc = xloc.bar_index,
          extend = extend.right,
-         bgcolor = color.new(color.red, 85),
-         border_color = color.new(color.red, 45))
+         bgcolor = resistBg,
+         border_color = resistBorder)
 
     SRZone zone = SRZone.new(
          lower,
@@ -111,9 +128,56 @@ if volumeQualified and atrReady
     if not na(pivotHigh)
         createResistanceZone(pivotHigh)
 
-// Temporary safety cap for the first visual prototype. Lifecycle management
-// will replace this simple oldest-first cleanup once break/flip/freeze logic is
-// implemented.
+// -----------------------------------------------------------------------------
+// Zone lifecycle
+// -----------------------------------------------------------------------------
+currentATR = ta.atr(atrLength)
+
+if array.size(zones) > 0
+    for i = 0 to array.size(zones) - 1
+        SRZone zone = array.get(zones, i)
+
+        if zone.active
+            bool broken = zone.isSupport ? close < zone.lower : close > zone.upper
+
+            if broken
+                // A break is close-confirmed. Wicks beyond the outer boundary
+                // do not flip a zone.
+                zone.isSupport := not zone.isSupport
+                zone.lastInteractionBar := bar_index
+                zone.reactionScore -= 1
+
+                if zone.isSupport
+                    box.set_bgcolor(zone.boxId, supportBg)
+                    box.set_border_color(zone.boxId, supportBorder)
+                else
+                    box.set_bgcolor(zone.boxId, resistBg)
+                    box.set_border_color(zone.boxId, resistBorder)
+            else
+                // Any overlap with the zone counts as interaction for lifecycle
+                // purposes. Several consecutive candles inside the same zone
+                // keep refreshing the same interaction window.
+                bool interacting = high >= zone.lower and low <= zone.upper
+                if interacting
+                    zone.lastInteractionBar := bar_index
+
+            float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
+            bool oldEnough = bar_index - zone.lastInteractionBar > staleBars
+            bool farEnough = not na(currentATR) and distanceFromZone > currentATR * staleDistanceATR
+
+            if oldEnough and farEnough
+                // Stale zones stay visible as historical structure, but stop
+                // extending and stop participating in lifecycle logic.
+                zone.active := false
+                box.set_extend(zone.boxId, extend.none)
+                box.set_right(zone.boxId, bar_index)
+                box.set_bgcolor(zone.boxId, staleBg)
+                box.set_border_color(zone.boxId, staleBorder)
+
+            array.set(zones, i, zone)
+
+// Hard resource guard. Frozen zones remain on the chart, so a finite cap is
+// still necessary to respect TradingView's box-object limit.
 maxStoredZones = 450
 if array.size(zones) > maxStoredZones
     SRZone oldest = array.shift(zones)
