@@ -18,7 +18,7 @@ zoneMultiplier = input.float(0.4, "ATR zone multiplier", minval = 0.01, step = 0
 
 groupLifecycle = "Zone Lifecycle"
 maxBreaks        = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
-breakToleranceATR = input.float(0.10, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
+breakToleranceATR = input.float(0.20, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
 staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
 staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
 
