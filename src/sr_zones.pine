@@ -50,6 +50,7 @@ type SRZone
     int createdBar
     int lastInteractionBar
     int touchCount
+    bool inInteraction
     int reactionScore
     int breakCount
     float birthVolumeRatio
@@ -84,7 +85,7 @@ zoneInfo(SRZone zone) =>
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        string baseText = state + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
         string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
         baseText + staleText
 
@@ -108,6 +109,7 @@ updateZoneVisuals(SRZone zone) =>
 
 freezeZone(SRZone zone, int ageBars, float distanceATR) =>
     zone.active := false
+    zone.inInteraction := false
     zone.frozenAgeBars := ageBars
     zone.frozenDistanceATR := distanceATR
     box.set_extend(zone.boxId, extend.none)
@@ -132,6 +134,7 @@ mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
             target.createdBar := math.min(target.createdBar, incoming.createdBar)
             target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
             target.touchCount := math.max(target.touchCount, incoming.touchCount)
+            target.inInteraction := target.inInteraction or incoming.inInteraction
             target.reactionScore := math.max(target.reactionScore, incoming.reactionScore)
             target.breakCount := math.max(target.breakCount, incoming.breakCount)
             target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
@@ -179,6 +182,7 @@ mergeActiveZones() =>
                                     a.createdBar := math.min(a.createdBar, b.createdBar)
                                     a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
                                     a.touchCount := math.max(a.touchCount, b.touchCount)
+                                    a.inInteraction := a.inInteraction or b.inInteraction
                                     a.reactionScore := math.max(a.reactionScore, b.reactionScore)
                                     a.breakCount := math.max(a.breakCount, b.breakCount)
                                     a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
@@ -196,14 +200,14 @@ createSupportZone(float pivotPrice) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=supportBg, border_color=supportBorder)
-    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, false, 0, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=resistBg, border_color=resistBorder)
-    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, false, 0, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 if volumeQualified and atrReady
@@ -226,6 +230,9 @@ if array.size(zones) > 0
             bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
 
             if broken
+                // Breaks are handled separately from touches. A break never
+                // starts a new interaction episode.
+                zone.inInteraction := false
                 zone.breakCount += 1
                 zone.lastInteractionBar := bar_index
                 zone.reactionScore -= 1
@@ -238,8 +245,17 @@ if array.size(zones) > 0
                     roleChanged := true
             else
                 bool interacting = high >= zone.lower and low <= zone.upper
+
                 if interacting
                     zone.lastInteractionBar := bar_index
+                    if not zone.inInteraction
+                        zone.inInteraction := true
+                        zone.touchCount += 1
+                        updateZoneInfo(zone)
+                else
+                    // One fully outside closed bar is enough to end the current
+                    // episode. A later overlap will then count as a new touch.
+                    zone.inInteraction := false
 
             if zone.active
                 float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
