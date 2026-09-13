@@ -17,16 +17,16 @@ atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
 zoneMultiplier = input.float(0.4, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
 
 groupLifecycle = "Zone Lifecycle"
-maxBreaks        = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
+maxBreaks         = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
 breakToleranceATR = input.float(0.20, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
-staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
-staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
+staleBars         = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
+staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
+
+groupMerge = "Zone Merging"
+mergeGapATR = input.float(0.10, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
 
 groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
-
-// Prototype defaults above are intentionally adjustable. They will be tuned
-// visually after we inspect the lifecycle on real charts.
 
 // -----------------------------------------------------------------------------
 // Visuals
@@ -63,17 +63,15 @@ var zones = array.new<SRZone>()
 pivotHigh = ta.pivothigh(high, leftBars, rightBars)
 pivotLow  = ta.pivotlow(low, leftBars, rightBars)
 
-// A pivot is discovered `rightBars` bars after it occurred. All birth evidence
-// below is deliberately read from the historical pivot bar, not from the
-// confirmation bar.
-pivotVolume   = volume[rightBars]
-priorVolumeMA = ta.sma(volume[1], volumeLength)[rightBars]
-pivotATR      = ta.atr(atrLength)[rightBars]
-pivotBar      = bar_index - rightBars
+pivotVolume    = volume[rightBars]
+priorVolumeMA  = ta.sma(volume[1], volumeLength)[rightBars]
+pivotATR       = ta.atr(atrLength)[rightBars]
+pivotBar       = bar_index - rightBars
 
 volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
-atrReady        = not na(pivotATR)
+atrReady         = not na(pivotATR)
 birthVolumeRatio = not na(priorVolumeMA) and priorVolumeMA > 0 ? pivotVolume / priorVolumeMA : na
+currentATR       = ta.atr(atrLength)
 
 // -----------------------------------------------------------------------------
 // Zone helpers
@@ -93,6 +91,17 @@ updateZoneInfo(SRZone zone) =>
     box.set_text_halign(zone.boxId, zone.active ? text.align_left : text.align_right)
     box.set_text_valign(zone.boxId, text.align_top)
 
+updateZoneVisuals(SRZone zone) =>
+    box.set_top(zone.boxId, zone.upper)
+    box.set_bottom(zone.boxId, zone.lower)
+    if zone.isSupport
+        box.set_bgcolor(zone.boxId, supportBg)
+        box.set_border_color(zone.boxId, supportBorder)
+    else
+        box.set_bgcolor(zone.boxId, resistBg)
+        box.set_border_color(zone.boxId, resistBorder)
+    updateZoneInfo(zone)
+
 freezeZone(SRZone zone) =>
     zone.active := false
     box.set_extend(zone.boxId, extend.none)
@@ -102,78 +111,102 @@ freezeZone(SRZone zone) =>
     updateZoneInfo(zone)
     zone
 
+zonesCloseEnough(SRZone a, SRZone b, float gapTolerance) =>
+    bool overlaps = a.lower <= b.upper and b.lower <= a.upper
+    float gap = a.upper < b.lower ? b.lower - a.upper : b.upper < a.lower ? a.lower - b.upper : 0.0
+    overlaps or gap <= gapTolerance
+
+mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
+    bool merged = false
+    if targetIndex >= 0 and targetIndex < array.size(zones)
+        SRZone target = array.get(zones, targetIndex)
+        if target.active and incoming.active and target.isSupport == incoming.isSupport and zonesCloseEnough(target, incoming, gapTolerance)
+            target.lower := math.min(target.lower, incoming.lower)
+            target.upper := math.max(target.upper, incoming.upper)
+            target.createdBar := math.min(target.createdBar, incoming.createdBar)
+            target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
+            target.touchCount := math.max(target.touchCount, incoming.touchCount)
+            target.reactionScore := math.max(target.reactionScore, incoming.reactionScore)
+            target.breakCount := math.max(target.breakCount, incoming.breakCount)
+            target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
+            box.set_left(target.boxId, math.min(box.get_left(target.boxId), box.get_left(incoming.boxId)))
+            box.delete(incoming.boxId)
+            updateZoneVisuals(target)
+            array.set(zones, targetIndex, target)
+            merged := true
+    merged
+
+addOrMergeZone(SRZone incoming) =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    int mergeIndex = -1
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone existing = array.get(zones, i)
+            if mergeIndex == -1 and existing.active and existing.isSupport == incoming.isSupport and zonesCloseEnough(existing, incoming, gapTolerance)
+                mergeIndex := i
+    if mergeIndex >= 0
+        mergeZoneAt(mergeIndex, incoming, gapTolerance)
+    else
+        updateZoneInfo(incoming)
+        array.push(zones, incoming)
+
+mergeActiveZones() =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    bool changed = true
+    while changed
+        changed := false
+        int count = array.size(zones)
+        if count > 1
+            for i = 0 to count - 2
+                if not changed
+                    SRZone a = array.get(zones, i)
+                    if a.active
+                        for j = i + 1 to count - 1
+                            if not changed
+                                SRZone b = array.get(zones, j)
+                                if b.active and a.isSupport == b.isSupport and zonesCloseEnough(a, b, gapTolerance)
+                                    a.lower := math.min(a.lower, b.lower)
+                                    a.upper := math.max(a.upper, b.upper)
+                                    a.createdBar := math.min(a.createdBar, b.createdBar)
+                                    a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
+                                    a.touchCount := math.max(a.touchCount, b.touchCount)
+                                    a.reactionScore := math.max(a.reactionScore, b.reactionScore)
+                                    a.breakCount := math.max(a.breakCount, b.breakCount)
+                                    a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
+                                    box.set_left(a.boxId, math.min(box.get_left(a.boxId), box.get_left(b.boxId)))
+                                    box.delete(b.boxId)
+                                    updateZoneVisuals(a)
+                                    array.set(zones, i, a)
+                                    array.remove(zones, j)
+                                    changed := true
+
 // -----------------------------------------------------------------------------
 // Zone creation
 // -----------------------------------------------------------------------------
 createSupportZone(float pivotPrice) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
-    box zoneBox = box.new(
-         left = pivotBar,
-         top = upper,
-         right = bar_index,
-         bottom = lower,
-         xloc = xloc.bar_index,
-         extend = extend.right,
-         bgcolor = supportBg,
-         border_color = supportBorder)
-
-    SRZone zone = SRZone.new(
-         lower,
-         upper,
-         true,
-         true,
-         bar_index,
-         bar_index,
-         0,
-         0,
-         0,
-         birthVolumeRatio,
-         zoneBox)
-
-    updateZoneInfo(zone)
-    array.push(zones, zone)
+    box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=supportBg, border_color=supportBorder)
+    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, zoneBox)
+    addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
-    box zoneBox = box.new(
-         left = pivotBar,
-         top = upper,
-         right = bar_index,
-         bottom = lower,
-         xloc = xloc.bar_index,
-         extend = extend.right,
-         bgcolor = resistBg,
-         border_color = resistBorder)
-
-    SRZone zone = SRZone.new(
-         lower,
-         upper,
-         false,
-         true,
-         bar_index,
-         bar_index,
-         0,
-         0,
-         0,
-         birthVolumeRatio,
-         zoneBox)
-
-    updateZoneInfo(zone)
-    array.push(zones, zone)
+    box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=resistBg, border_color=resistBorder)
+    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, zoneBox)
+    addOrMergeZone(zone)
 
 if volumeQualified and atrReady
     if not na(pivotLow)
         createSupportZone(pivotLow)
-
     if not na(pivotHigh)
         createResistanceZone(pivotHigh)
 
 // -----------------------------------------------------------------------------
 // Zone lifecycle
 // -----------------------------------------------------------------------------
-currentATR = ta.atr(atrLength)
+bool roleChanged = false
 
 if array.size(zones) > 0
     for i = 0 to array.size(zones) - 1
@@ -184,33 +217,17 @@ if array.size(zones) > 0
             bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
 
             if broken
-                // A break requires a close beyond the outer boundary plus the
-                // current-volatility tolerance. Wicks and marginal close-throughs
-                // do not flip a zone.
                 zone.breakCount += 1
                 zone.lastInteractionBar := bar_index
                 zone.reactionScore -= 1
 
                 if zone.breakCount >= maxBreaks
-                    // Repeated role reversals indicate that the area is no
-                    // longer behaving as useful support/resistance. Preserve
-                    // it historically, but retire it from active logic.
                     zone := freezeZone(zone)
                 else
                     zone.isSupport := not zone.isSupport
-
-                    if zone.isSupport
-                        box.set_bgcolor(zone.boxId, supportBg)
-                        box.set_border_color(zone.boxId, supportBorder)
-                    else
-                        box.set_bgcolor(zone.boxId, resistBg)
-                        box.set_border_color(zone.boxId, resistBorder)
-
-                    updateZoneInfo(zone)
+                    updateZoneVisuals(zone)
+                    roleChanged := true
             else
-                // Any overlap with the zone counts as interaction for lifecycle
-                // purposes. Several consecutive candles inside the same zone
-                // keep refreshing the same interaction window.
                 bool interacting = high >= zone.lower and low <= zone.upper
                 if interacting
                     zone.lastInteractionBar := bar_index
@@ -219,11 +236,15 @@ if array.size(zones) > 0
                 float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
                 bool oldEnough = bar_index - zone.lastInteractionBar > staleBars
                 bool farEnough = not na(currentATR) and distanceFromZone > currentATR * staleDistanceATR
-
                 if oldEnough and farEnough
                     zone := freezeZone(zone)
 
             array.set(zones, i, zone)
+
+// A role flip can create a same-role neighbor that did not exist before the
+// break. Re-run clustering after lifecycle updates so those zones can merge too.
+if roleChanged
+    mergeActiveZones()
 
 // Hard resource guard. Frozen zones remain on the chart, so a finite cap is
 // still necessary to respect TradingView's box-object limit.
