@@ -88,7 +88,7 @@ zoneInfo(SRZone zone) =>
 updateZoneInfo(SRZone zone) =>
     box.set_text(zone.boxId, zoneInfo(zone))
     box.set_text_color(zone.boxId, zoneTextColor)
-    box.set_text_size(zone.boxId, size.tiny)
+    box.set_text_size(zone.boxId, size.normal)
     box.set_text_halign(zone.boxId, text.align_right)
     box.set_text_valign(zone.boxId, text.align_top)
 
