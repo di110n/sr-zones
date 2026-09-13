@@ -36,7 +36,7 @@ resistBg      = color.new(color.red, 85)
 resistBorder  = color.new(color.red, 45)
 staleBg       = color.new(color.gray, 90)
 staleBorder   = color.new(color.gray, 65)
-zoneTextColor = color.new(color.white, 15)
+zoneTextColor = color.black
 
 // -----------------------------------------------------------------------------
 // Zone model
@@ -83,7 +83,7 @@ zoneInfo(SRZone zone) =>
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        state + " | B:" + str.tostring(zone.breakCount) + "\nV:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        state + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
 
 updateZoneInfo(SRZone zone) =>
     box.set_text(zone.boxId, zoneInfo(zone))
