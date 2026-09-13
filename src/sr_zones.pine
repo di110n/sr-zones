@@ -21,6 +21,9 @@ maxBreaks        = input.int(3, "Freeze after breaks", minval = 1, group = group
 staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
 staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
 
+groupDisplay = "Display"
+showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
+
 // Prototype defaults above are intentionally adjustable. They will be tuned
 // visually after we inspect the lifecycle on real charts.
 
@@ -33,6 +36,7 @@ resistBg      = color.new(color.red, 85)
 resistBorder  = color.new(color.red, 45)
 staleBg       = color.new(color.gray, 90)
 staleBorder   = color.new(color.gray, 65)
+zoneTextColor = color.new(color.white, 15)
 
 // -----------------------------------------------------------------------------
 // Zone model
@@ -47,6 +51,7 @@ type SRZone
     int touchCount
     int reactionScore
     int breakCount
+    float birthVolumeRatio
     box boxId
 
 var zones = array.new<SRZone>()
@@ -67,16 +72,33 @@ pivotBar      = bar_index - rightBars
 
 volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
 atrReady        = not na(pivotATR)
+birthVolumeRatio = not na(priorVolumeMA) and priorVolumeMA > 0 ? pivotVolume / priorVolumeMA : na
 
 // -----------------------------------------------------------------------------
 // Zone helpers
 // -----------------------------------------------------------------------------
+zoneInfo(SRZone zone) =>
+    if not showZoneInfo
+        ""
+    else
+        string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
+        string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
+        state + " | B:" + str.tostring(zone.breakCount) + "\nV:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+
+updateZoneInfo(SRZone zone) =>
+    box.set_text(zone.boxId, zoneInfo(zone))
+    box.set_text_color(zone.boxId, zoneTextColor)
+    box.set_text_size(zone.boxId, size.tiny)
+    box.set_text_halign(zone.boxId, text.align_right)
+    box.set_text_valign(zone.boxId, text.align_top)
+
 freezeZone(SRZone zone) =>
     zone.active := false
     box.set_extend(zone.boxId, extend.none)
     box.set_right(zone.boxId, bar_index)
     box.set_bgcolor(zone.boxId, staleBg)
     box.set_border_color(zone.boxId, staleBorder)
+    updateZoneInfo(zone)
     zone
 
 // -----------------------------------------------------------------------------
@@ -105,8 +127,10 @@ createSupportZone(float pivotPrice) =>
          0,
          0,
          0,
+         birthVolumeRatio,
          zoneBox)
 
+    updateZoneInfo(zone)
     array.push(zones, zone)
 
 createResistanceZone(float pivotPrice) =>
@@ -132,8 +156,10 @@ createResistanceZone(float pivotPrice) =>
          0,
          0,
          0,
+         birthVolumeRatio,
          zoneBox)
 
+    updateZoneInfo(zone)
     array.push(zones, zone)
 
 if volumeQualified and atrReady
@@ -176,6 +202,8 @@ if array.size(zones) > 0
                     else
                         box.set_bgcolor(zone.boxId, resistBg)
                         box.set_border_color(zone.boxId, resistBorder)
+
+                    updateZoneInfo(zone)
             else
                 // Any overlap with the zone counts as interaction for lifecycle
                 // purposes. Several consecutive candles inside the same zone
