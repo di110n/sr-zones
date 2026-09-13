@@ -53,6 +53,8 @@ type SRZone
     int reactionScore
     int breakCount
     float birthVolumeRatio
+    int frozenAgeBars
+    float frozenDistanceATR
     box boxId
 
 var zones = array.new<SRZone>()
@@ -82,7 +84,9 @@ zoneInfo(SRZone zone) =>
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        state + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = state + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
+        baseText + staleText
 
 updateZoneInfo(SRZone zone) =>
     box.set_text(zone.boxId, zoneInfo(zone))
@@ -102,8 +106,10 @@ updateZoneVisuals(SRZone zone) =>
         box.set_border_color(zone.boxId, resistBorder)
     updateZoneInfo(zone)
 
-freezeZone(SRZone zone) =>
+freezeZone(SRZone zone, int ageBars, float distanceATR) =>
     zone.active := false
+    zone.frozenAgeBars := ageBars
+    zone.frozenDistanceATR := distanceATR
     box.set_extend(zone.boxId, extend.none)
     box.set_right(zone.boxId, bar_index)
     box.set_bgcolor(zone.boxId, staleBg)
@@ -190,14 +196,14 @@ createSupportZone(float pivotPrice) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=supportBg, border_color=supportBorder)
-    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=resistBg, border_color=resistBorder)
-    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, 0, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 if volumeQualified and atrReady
@@ -225,7 +231,7 @@ if array.size(zones) > 0
                 zone.reactionScore -= 1
 
                 if zone.breakCount >= maxBreaks
-                    zone := freezeZone(zone)
+                    zone := freezeZone(zone, na, na)
                 else
                     zone.isSupport := not zone.isSupport
                     updateZoneVisuals(zone)
@@ -237,10 +243,12 @@ if array.size(zones) > 0
 
             if zone.active
                 float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
-                bool oldEnough = bar_index - zone.lastInteractionBar > staleBars
-                bool farEnough = not na(currentATR) and distanceFromZone > currentATR * staleDistanceATR
+                int ageBars = bar_index - zone.lastInteractionBar
+                float distanceATR = not na(currentATR) and currentATR > 0 ? distanceFromZone / currentATR : na
+                bool oldEnough = ageBars > staleBars
+                bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
                 if oldEnough and farEnough
-                    zone := freezeZone(zone)
+                    zone := freezeZone(zone, ageBars, distanceATR)
 
             array.set(zones, i, zone)
 
