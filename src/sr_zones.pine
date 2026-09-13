@@ -1,0 +1,120 @@
+//@version=6
+indicator("Dynamic S/R Zones", overlay = true, max_boxes_count = 500)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+groupPivots = "Pivot Detection"
+leftBars  = input.int(10, "Left bars", minval = 1, group = groupPivots)
+rightBars = input.int(5, "Right / confirmation bars", minval = 1, group = groupPivots)
+
+groupVolume = "Volume Birth Gate"
+volumeLength     = input.int(20, "Volume SMA length", minval = 1, group = groupVolume)
+volumeMultiplier = input.float(1.5, "Volume multiplier", minval = 0.1, step = 0.1, group = groupVolume)
+
+groupZones = "Initial Zone Geometry"
+atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
+zoneMultiplier = input.float(0.2, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
+
+// -----------------------------------------------------------------------------
+// Zone model
+// -----------------------------------------------------------------------------
+type SRZone
+    float lower
+    float upper
+    bool isSupport
+    bool active
+    int createdBar
+    int lastInteractionBar
+    int touchCount
+    int reactionScore
+    box boxId
+
+var zones = array.new<SRZone>()
+
+// -----------------------------------------------------------------------------
+// Pivot detection
+// -----------------------------------------------------------------------------
+pivotHigh = ta.pivothigh(high, leftBars, rightBars)
+pivotLow  = ta.pivotlow(low, leftBars, rightBars)
+
+// A pivot is discovered `rightBars` bars after it occurred. All birth evidence
+// below is deliberately read from the historical pivot bar, not from the
+// confirmation bar.
+pivotVolume   = volume[rightBars]
+priorVolumeMA = ta.sma(volume[1], volumeLength)[rightBars]
+pivotATR      = ta.atr(atrLength)[rightBars]
+pivotBar      = bar_index - rightBars
+
+volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
+atrReady        = not na(pivotATR)
+
+// -----------------------------------------------------------------------------
+// Zone creation
+// -----------------------------------------------------------------------------
+createSupportZone(float pivotPrice) =>
+    float lower = pivotPrice
+    float upper = pivotPrice + pivotATR * zoneMultiplier
+    box zoneBox = box.new(
+         left = pivotBar,
+         top = upper,
+         right = bar_index,
+         bottom = lower,
+         xloc = xloc.bar_index,
+         extend = extend.right,
+         bgcolor = color.new(color.teal, 85),
+         border_color = color.new(color.teal, 45))
+
+    SRZone zone = SRZone.new(
+         lower,
+         upper,
+         true,
+         true,
+         bar_index,
+         bar_index,
+         0,
+         0,
+         zoneBox)
+
+    array.push(zones, zone)
+
+createResistanceZone(float pivotPrice) =>
+    float upper = pivotPrice
+    float lower = pivotPrice - pivotATR * zoneMultiplier
+    box zoneBox = box.new(
+         left = pivotBar,
+         top = upper,
+         right = bar_index,
+         bottom = lower,
+         xloc = xloc.bar_index,
+         extend = extend.right,
+         bgcolor = color.new(color.red, 85),
+         border_color = color.new(color.red, 45))
+
+    SRZone zone = SRZone.new(
+         lower,
+         upper,
+         false,
+         true,
+         bar_index,
+         bar_index,
+         0,
+         0,
+         zoneBox)
+
+    array.push(zones, zone)
+
+if volumeQualified and atrReady
+    if not na(pivotLow)
+        createSupportZone(pivotLow)
+
+    if not na(pivotHigh)
+        createResistanceZone(pivotHigh)
+
+// Temporary safety cap for the first visual prototype. Lifecycle management
+// will replace this simple oldest-first cleanup once break/flip/freeze logic is
+// implemented.
+maxStoredZones = 450
+if array.size(zones) > maxStoredZones
+    SRZone oldest = array.shift(zones)
+    box.delete(oldest.boxId)
