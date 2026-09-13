@@ -144,11 +144,14 @@ addOrMergeZone(SRZone incoming) =>
             SRZone existing = array.get(zones, i)
             if mergeIndex == -1 and existing.active and existing.isSupport == incoming.isSupport and zonesCloseEnough(existing, incoming, gapTolerance)
                 mergeIndex := i
+
+    bool merged = false
     if mergeIndex >= 0
-        mergeZoneAt(mergeIndex, incoming, gapTolerance)
+        merged := mergeZoneAt(mergeIndex, incoming, gapTolerance)
     else
         updateZoneInfo(incoming)
         array.push(zones, incoming)
+    merged
 
 mergeActiveZones() =>
     float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
@@ -241,13 +244,9 @@ if array.size(zones) > 0
 
             array.set(zones, i, zone)
 
-// A role flip can create a same-role neighbor that did not exist before the
-// break. Re-run clustering after lifecycle updates so those zones can merge too.
 if roleChanged
     mergeActiveZones()
 
-// Hard resource guard. Frozen zones remain on the chart, so a finite cap is
-// still necessary to respect TradingView's box-object limit.
 maxStoredZones = 450
 if array.size(zones) > maxStoredZones
     SRZone oldest = array.shift(zones)
