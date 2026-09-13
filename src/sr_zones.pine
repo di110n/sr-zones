@@ -14,10 +14,11 @@ volumeMultiplier = input.float(1.5, "Volume multiplier", minval = 0.1, step = 0.
 
 groupZones = "Initial Zone Geometry"
 atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
-zoneMultiplier = input.float(0.2, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
+zoneMultiplier = input.float(0.4, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
 
 groupLifecycle = "Zone Lifecycle"
 maxBreaks        = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
+breakToleranceATR = input.float(0.10, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
 staleBars        = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
 staleDistanceATR = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
 
@@ -179,10 +180,12 @@ if array.size(zones) > 0
         SRZone zone = array.get(zones, i)
 
         if zone.active
-            bool broken = zone.isSupport ? close < zone.lower : close > zone.upper
+            float breakTolerance = currentATR * breakToleranceATR
+            bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
 
             if broken
-                // A break is close-confirmed. Wicks beyond the outer boundary
+                // A break requires a close beyond the outer boundary plus the
+                // current-volatility tolerance. Wicks and marginal close-throughs
                 // do not flip a zone.
                 zone.breakCount += 1
                 zone.lastInteractionBar := bar_index
