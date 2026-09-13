@@ -23,7 +23,7 @@ staleBars         = input.int(100, "Stale after bars without interaction", minva
 staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
 
 groupMerge = "Zone Merging"
-mergeGapATR = input.float(0.10, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
+mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
 
 groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
