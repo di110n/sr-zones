@@ -25,7 +25,10 @@ staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", min
 groupMerge = "Zone Merging"
 mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
 
-groupReaction = "Reaction Detection"\nreactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)\n\ngroupDisplay = "Display"
+groupReaction = "Reaction Detection"
+reactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)
+
+groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
 
 // -----------------------------------------------------------------------------
