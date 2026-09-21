@@ -25,7 +25,7 @@ staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", min
 groupMerge = "Zone Merging"
 mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
 
-groupDisplay = "Display"
+groupReaction = "Reaction Detection"\nreactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)\n\ngroupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
 
 // -----------------------------------------------------------------------------
@@ -85,7 +85,7 @@ zoneInfo(SRZone zone) =>
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionScore) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
         string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
         baseText + staleText
 
@@ -200,14 +200,14 @@ createSupportZone(float pivotPrice) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=supportBg, border_color=supportBorder)
-    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, false, 0, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, true, true, pivotBar, bar_index, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left=pivotBar, top=upper, right=bar_index, bottom=lower, xloc=xloc.bar_index, extend=extend.right, bgcolor=resistBg, border_color=resistBorder)
-    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, false, 0, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(lower, upper, false, true, pivotBar, bar_index, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 if volumeQualified and atrReady
