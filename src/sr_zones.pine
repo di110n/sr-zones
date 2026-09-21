@@ -54,7 +54,7 @@ type SRZone
     int lastInteractionBar
     int touchCount
     bool inInteraction
-    int reactionScore
+    int reactionCount
     bool reactionPending
     float reactionATRAtTouch
     int breakCount
@@ -90,7 +90,7 @@ zoneInfo(SRZone zone) =>
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionScore) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
         string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
         baseText + staleText
 
@@ -115,6 +115,8 @@ updateZoneVisuals(SRZone zone) =>
 freezeZone(SRZone zone, int ageBars, float distanceATR) =>
     zone.active := false
     zone.inInteraction := false
+    zone.reactionPending := false
+    zone.reactionATRAtTouch := na
     zone.frozenAgeBars := ageBars
     zone.frozenDistanceATR := distanceATR
     box.set_extend(zone.boxId, extend.none)
@@ -140,7 +142,13 @@ mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
             target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
             target.touchCount := math.max(target.touchCount, incoming.touchCount)
             target.inInteraction := target.inInteraction or incoming.inInteraction
-            target.reactionScore := math.max(target.reactionScore, incoming.reactionScore)
+            target.reactionCount := math.max(target.reactionCount, incoming.reactionCount)
+            bool targetPending = target.reactionPending
+            bool incomingPending = incoming.reactionPending
+            float targetReactionATR = target.reactionATRAtTouch
+            float incomingReactionATR = incoming.reactionATRAtTouch
+            target.reactionPending := targetPending or incomingPending
+            target.reactionATRAtTouch := targetPending and incomingPending ? math.max(targetReactionATR, incomingReactionATR) : targetPending ? targetReactionATR : incomingPending ? incomingReactionATR : na
             target.breakCount := math.max(target.breakCount, incoming.breakCount)
             target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
             box.set_left(target.boxId, math.min(box.get_left(target.boxId), box.get_left(incoming.boxId)))
@@ -188,7 +196,13 @@ mergeActiveZones() =>
                                     a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
                                     a.touchCount := math.max(a.touchCount, b.touchCount)
                                     a.inInteraction := a.inInteraction or b.inInteraction
-                                    a.reactionScore := math.max(a.reactionScore, b.reactionScore)
+                                    a.reactionCount := math.max(a.reactionCount, b.reactionCount)
+                                    bool aPending = a.reactionPending
+                                    bool bPending = b.reactionPending
+                                    float aReactionATR = a.reactionATRAtTouch
+                                    float bReactionATR = b.reactionATRAtTouch
+                                    a.reactionPending := aPending or bPending
+                                    a.reactionATRAtTouch := aPending and bPending ? math.max(aReactionATR, bReactionATR) : aPending ? aReactionATR : bPending ? bReactionATR : na
                                     a.breakCount := math.max(a.breakCount, b.breakCount)
                                     a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
                                     box.set_left(a.boxId, math.min(box.get_left(a.boxId), box.get_left(b.boxId)))
@@ -235,12 +249,13 @@ if array.size(zones) > 0
             bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
 
             if broken
-                // Breaks are handled separately from touches. A break never
-                // starts a new interaction episode.
+                // A confirmed break cancels any unconfirmed reaction from the
+                // current touch. Breaks are tracked independently from reactions.
                 zone.inInteraction := false
+                zone.reactionPending := false
+                zone.reactionATRAtTouch := na
                 zone.breakCount += 1
                 zone.lastInteractionBar := bar_index
-                zone.reactionScore -= 1
 
                 if zone.breakCount >= maxBreaks
                     zone := freezeZone(zone, na, na)
@@ -254,13 +269,27 @@ if array.size(zones) > 0
                 if interacting
                     zone.lastInteractionBar := bar_index
                     if not zone.inInteraction
+                        // A new touch episode replaces any still-unconfirmed
+                        // reaction from the previous episode.
                         zone.inInteraction := true
                         zone.touchCount += 1
+                        zone.reactionPending := not na(currentATR)
+                        zone.reactionATRAtTouch := currentATR
                         updateZoneInfo(zone)
                 else
-                    // One fully outside closed bar is enough to end the current
-                    // episode. A later overlap will then count as a new touch.
+                    // One fully outside closed bar ends the touch episode.
+                    // Reaction confirmation is evaluated only after price has
+                    // left the zone, never while it is still overlapping it.
                     zone.inInteraction := false
+
+                    if zone.reactionPending and not na(zone.reactionATRAtTouch)
+                        float requiredMove = zone.reactionATRAtTouch * reactionATR
+                        bool reacted = zone.isSupport ? high >= zone.upper + requiredMove : low <= zone.lower - requiredMove
+                        if reacted
+                            zone.reactionCount += 1
+                            zone.reactionPending := false
+                            zone.reactionATRAtTouch := na
+                            updateZoneInfo(zone)
 
             if zone.active
                 float distanceFromZone = close > zone.upper ? close - zone.upper : close < zone.lower ? zone.lower - close : 0.0
