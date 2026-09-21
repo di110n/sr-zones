@@ -55,6 +55,8 @@ type SRZone
     int touchCount
     bool inInteraction
     int reactionScore
+    bool reactionPending
+    float reactionATRAtTouch
     int breakCount
     float birthVolumeRatio
     int frozenAgeBars
