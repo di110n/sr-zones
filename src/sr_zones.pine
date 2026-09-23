@@ -28,6 +28,10 @@ mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, gr
 groupReaction = "Reaction Detection"
 reactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)
 
+groupStrength = "Zone Strength"
+responsiveMinTouches = input.int(2, "Responsive: minimum touches", minval = 1, group = groupStrength)
+responsiveMinRate = input.float(0.50, "Responsive: minimum reaction rate", minval = 0.0, maxval = 1.0, step = 0.05, group = groupStrength)
+
 groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
 
@@ -84,13 +88,18 @@ currentATR       = ta.atr(atrLength)
 // -----------------------------------------------------------------------------
 // Zone helpers
 // -----------------------------------------------------------------------------
+zoneStrengthState(SRZone zone) =>
+    float reactionRate = zone.touchCount > 0 ? float(zone.reactionCount) / zone.touchCount : na
+    zone.touchCount == 0 ? "UNTESTED" : zone.breakCount > 0 ? "DAMAGED" : zone.touchCount >= responsiveMinTouches and reactionRate >= responsiveMinRate ? "RESPONSIVE" : "TESTED"
+
 zoneInfo(SRZone zone) =>
     if not showZoneInfo
         ""
     else
         string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
+        string strength = zoneStrengthState(zone)
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        string baseText = state + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
         string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
         baseText + staleText
 
