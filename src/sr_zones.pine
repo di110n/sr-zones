@@ -71,8 +71,7 @@ zoneTextColor = color.black
 // That makes the data available from the first chart bar of the next requested
 // timeframe period without leaking information from an unfinished HTF candle.
 // -----------------------------------------------------------------------------
-[zoneBarTime, zoneBarCloseTime, zoneHigh, zoneLow, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] =
-    request.security(
+[zoneBarTime, zoneBarCloseTime, zoneHigh, zoneLow, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] = request.security(
         syminfo.tickerid,
         zoneTf,
         [
