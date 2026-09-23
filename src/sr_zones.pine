@@ -96,7 +96,7 @@ zoneInfo(SRZone zone) =>
     if not showZoneInfo
         ""
     else
-        string state = zone.active ? (zone.isSupport ? "S" : "R") : "FROZEN"
+        string state = zone.active ? (zone.isSupport ? "Su" : "Re") : "FROZEN"
         string strength = zoneStrengthState(zone)
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
         string baseText = state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
