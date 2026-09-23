@@ -12,6 +12,10 @@ groupPivots = "Pivot Detection"
 leftBars  = input.int(10, "Left bars", minval = 1, group = groupPivots)
 rightBars = input.int(5, "Right / confirmation bars", minval = 1, group = groupPivots)
 
+groupStructure = "Market Structure"
+structureLeftBars  = input.int(5, "Structure left bars", minval = 1, group = groupStructure)
+structureRightBars = input.int(2, "Structure right / confirmation bars", minval = 1, group = groupStructure)
+
 groupVolume = "Volume Birth Gate"
 volumeLength     = input.int(20, "Volume SMA length", minval = 1, group = groupVolume)
 volumeMultiplier = input.float(1.5, "Volume multiplier", minval = 0.1, step = 0.1, group = groupVolume)
@@ -101,8 +105,8 @@ birthVolumeRatio = not na(priorVolumeMA) and priorVolumeMA > 0 ? pivotVolume / p
 currentATR       = zoneATR
 
 marketStructureState() =>
-    float swingHigh = ta.pivothigh(high, leftBars, rightBars)
-    float swingLow = ta.pivotlow(low, leftBars, rightBars)
+    float swingHigh = ta.pivothigh(high, structureLeftBars, structureRightBars)
+    float swingLow = ta.pivotlow(low, structureLeftBars, structureRightBars)
     float latestHigh = ta.valuewhen(not na(swingHigh), swingHigh, 0)
     float previousHigh = ta.valuewhen(not na(swingHigh), swingHigh, 1)
     float latestLow = ta.valuewhen(not na(swingLow), swingLow, 0)
@@ -116,7 +120,7 @@ marketStructureState() =>
 
 int structureState = validTimeframes ? request.security(syminfo.tickerid, structureTf, marketStructureState()[1], lookahead = barmerge.lookahead_on) : 0
 
-[structurePivotHigh, structurePivotLow] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, leftBars, rightBars)[1], ta.pivotlow(low, leftBars, rightBars)[1]], lookahead = barmerge.lookahead_on)
+[structurePivotHigh, structurePivotLow] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, structureLeftBars, structureRightBars)[1], ta.pivotlow(low, structureLeftBars, structureRightBars)[1]], lookahead = barmerge.lookahead_on)
 
 bool newStructurePeriod = timeframe.change(structureTf)
 bool confirmedStructureHigh = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotHigh)
