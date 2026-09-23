@@ -90,7 +90,7 @@ currentATR       = ta.atr(atrLength)
 // -----------------------------------------------------------------------------
 zoneStrengthState(SRZone zone) =>
     float reactionRate = zone.touchCount > 0 ? float(zone.reactionCount) / zone.touchCount : na
-    zone.touchCount == 0 ? "UNTESTED" : zone.breakCount > 0 ? "DAMAGED" : zone.touchCount >= responsiveMinTouches and reactionRate >= responsiveMinRate ? "RESPONSIVE" : "TESTED"
+    zone.touchCount == 0 ? "UNTESTED" : zone.touchCount >= responsiveMinTouches and reactionRate >= responsiveMinRate ? "RESPONSIVE" : "TESTED"
 
 zoneInfo(SRZone zone) =>
     if not showZoneInfo
