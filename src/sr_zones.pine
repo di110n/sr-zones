@@ -39,6 +39,7 @@ responsiveMinRate = input.float(0.50, "Responsive: minimum reaction rate", minva
 groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
 showContextPanel = input.bool(true, "Show timeframe / structure panel", group = groupDisplay)
+showStructurePivots = input.bool(false, "Show STF structure pivots", group = groupDisplay)
 
 // -----------------------------------------------------------------------------
 // Timeframe architecture and validation
@@ -114,6 +115,15 @@ marketStructureState() =>
     bullish ? 1 : bearish ? -1 : 0
 
 int structureState = validTimeframes ? request.security(syminfo.tickerid, structureTf, marketStructureState()[1], lookahead = barmerge.lookahead_on) : 0
+
+[structurePivotHigh, structurePivotLow] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, leftBars, rightBars)[1], ta.pivotlow(low, leftBars, rightBars)[1]], lookahead = barmerge.lookahead_on)
+
+bool newStructurePeriod = timeframe.change(structureTf)
+bool confirmedStructureHigh = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotHigh)
+bool confirmedStructureLow = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotLow)
+
+plotshape(confirmedStructureHigh ? structurePivotHigh : na, title = "STF swing high", style = shape.triangledown, location = location.absolute, color = color.red, size = size.small, text = "SH", textcolor = color.red)
+plotshape(confirmedStructureLow ? structurePivotLow : na, title = "STF swing low", style = shape.triangleup, location = location.absolute, color = color.teal, size = size.small, text = "SL", textcolor = color.teal)
 
 structureStateText(int state) =>
     state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
