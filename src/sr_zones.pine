@@ -120,14 +120,19 @@ marketStructureState() =>
 
 int structureState = validTimeframes ? request.security(syminfo.tickerid, structureTf, marketStructureState()[1], lookahead = barmerge.lookahead_on) : 0
 
-[structurePivotHigh, structurePivotLow] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, structureLeftBars, structureRightBars)[1], ta.pivotlow(low, structureLeftBars, structureRightBars)[1]], lookahead = barmerge.lookahead_on)
+[structurePivotHigh, structurePivotLow, structurePivotTime] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, structureLeftBars, structureRightBars)[1], ta.pivotlow(low, structureLeftBars, structureRightBars)[1], time[structureRightBars + 1]], lookahead = barmerge.lookahead_on)
 
 bool newStructurePeriod = timeframe.change(structureTf)
 bool confirmedStructureHigh = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotHigh)
 bool confirmedStructureLow = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotLow)
 
-plotshape(confirmedStructureHigh ? structurePivotHigh : na, title = "STF swing high", style = shape.triangledown, location = location.absolute, color = color.red, size = size.small, text = "SH", textcolor = color.red)
-plotshape(confirmedStructureLow ? structurePivotLow : na, title = "STF swing low", style = shape.triangleup, location = location.absolute, color = color.teal, size = size.small, text = "SL", textcolor = color.teal)
+var label structureHighLabel = na
+var label structureLowLabel = na
+
+if confirmedStructureHigh
+    structureHighLabel := label.new(structurePivotTime, structurePivotHigh, "SH", xloc = xloc.bar_time, style = label.style_triangledown, color = color.red, textcolor = color.red, size = size.small)
+if confirmedStructureLow
+    structureLowLabel := label.new(structurePivotTime, structurePivotLow, "SL", xloc = xloc.bar_time, style = label.style_triangleup, color = color.teal, textcolor = color.teal, size = size.small)
 
 structureStateText(int state) =>
     state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
