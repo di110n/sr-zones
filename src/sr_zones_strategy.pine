@@ -468,6 +468,17 @@ if processZoneBar
 // -----------------------------------------------------------------------------
 // Strategy setup lifecycle helpers
 // -----------------------------------------------------------------------------
+setupOpportunityKey(int zoneId, int touchCount) =>
+    str.tostring(zoneId) + ":" + str.tostring(touchCount)
+
+setupOpportunityConsumed(array<string> consumed, int zoneId, int touchCount) =>
+    array.includes(consumed, setupOpportunityKey(zoneId, touchCount))
+
+consumeSetupOpportunity(array<string> consumed, int zoneId, int touchCount) =>
+    string key = setupOpportunityKey(zoneId, touchCount)
+    if not array.includes(consumed, key)
+        array.push(consumed, key)
+
 setupZoneStillValid(int setupZoneId, int setupTouchCount, bool requireSupport) =>
     bool valid = false
     if not na(setupZoneId) and not na(setupTouchCount) and array.size(zones) > 0
@@ -507,10 +518,8 @@ var int nextTradeId = 1
 var int activeTradeId = na
 var int activeTradeZoneId = na
 var int activeTradeTouchCount = na
-var int lastConsumedLongZoneId = na
-var int lastConsumedLongTouchCount = na
-var int lastConsumedShortZoneId = na
-var int lastConsumedShortTouchCount = na
+var array<string> consumedLongOpportunities = array.new_string()
+var array<string> consumedShortOpportunities = array.new_string()
 
 if validTimeframes and strategy.position_size == 0 and strategy.position_size[1] == 0
     // Arm a setup from the first matching active zone touched on this CTF bar.
@@ -519,7 +528,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             SRZone zone = array.get(zones, i)
             if zone.active
                 bool ctfInteracts = high >= zone.lower and low <= zone.upper
-                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and ctfInteracts and not longSetupPending and not (zone.id == lastConsumedLongZoneId and zone.touchCount == lastConsumedLongTouchCount)
+                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and ctfInteracts and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
                     longSetupPending := true
                     longSetupLower := zone.lower
                     longSetupUpper := zone.upper
@@ -528,7 +537,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
                     longSetupTouchCount := zone.touchCount
                     if debugStrategy
                         log.info("ARM_LONG | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
-                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending and not (zone.id == lastConsumedShortZoneId and zone.touchCount == lastConsumedShortTouchCount)
+                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending and not setupOpportunityConsumed(consumedShortOpportunities, zone.id, zone.touchCount)
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
@@ -589,8 +598,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             nextTradeId += 1
             activeTradeZoneId := longSetupZoneId
             activeTradeTouchCount := longSetupTouchCount
-            lastConsumedLongZoneId := longSetupZoneId
-            lastConsumedLongTouchCount := longSetupTouchCount
+            consumeSetupOpportunity(consumedLongOpportunities, longSetupZoneId, longSetupTouchCount)
             if debugStrategy
                 log.info("ENTER_LONG | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Long", strategy.long)
@@ -622,8 +630,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             nextTradeId += 1
             activeTradeZoneId := shortSetupZoneId
             activeTradeTouchCount := shortSetupTouchCount
-            lastConsumedShortZoneId := shortSetupZoneId
-            lastConsumedShortTouchCount := shortSetupTouchCount
+            consumeSetupOpportunity(consumedShortOpportunities, shortSetupZoneId, shortSetupTouchCount)
             if debugStrategy
                 log.info("ENTER_SHORT | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Short", strategy.short)
