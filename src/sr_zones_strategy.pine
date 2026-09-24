@@ -1,0 +1,519 @@
+//@version=6
+strategy("Dynamic S/R Zones Strategy", overlay = true, max_boxes_count = 500, pyramiding = 0, process_orders_on_close = true)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+groupTimeframes = "Timeframes"
+zoneTfInput      = input.timeframe("", "Zone timeframe", group = groupTimeframes)
+structureTfInput = input.timeframe("240", "Structure timeframe", group = groupTimeframes)
+
+groupPivots = "Pivot Detection"
+leftBars  = input.int(10, "Left bars", minval = 1, group = groupPivots)
+rightBars = input.int(5, "Right / confirmation bars", minval = 1, group = groupPivots)
+
+groupStructure = "Market Structure"
+structureLeftBars  = input.int(5, "Structure left bars", minval = 1, group = groupStructure)
+structureRightBars = input.int(2, "Structure right / confirmation bars", minval = 1, group = groupStructure)
+
+groupVolume = "Volume Birth Gate"
+volumeLength     = input.int(20, "Volume SMA length", minval = 1, group = groupVolume)
+volumeMultiplier = input.float(1.5, "Volume multiplier", minval = 0.1, step = 0.1, group = groupVolume)
+
+groupZones = "Initial Zone Geometry"
+atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
+zoneMultiplier = input.float(0.4, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
+
+groupLifecycle = "Zone Lifecycle"
+maxBreaks         = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
+breakToleranceATR = input.float(0.20, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
+staleBars         = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
+staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
+
+groupMerge = "Zone Merging"
+mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
+
+groupReaction = "Reaction Detection"
+reactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)
+
+groupStrength = "Zone Strength"
+responsiveMinTouches = input.int(2, "Responsive: minimum touches", minval = 1, group = groupStrength)
+responsiveMinRate = input.float(0.50, "Responsive: minimum reaction rate", minval = 0.0, maxval = 1.0, step = 0.05, group = groupStrength)
+
+groupStrategy = "Strategy"
+stopBufferATR = input.float(0.20, "Stop buffer (ZTF ATR)", minval = 0.0, step = 0.01, group = groupStrategy)
+minimumRewardR = input.float(2.0, "Minimum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
+
+groupDisplay = "Display"
+showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
+showContextPanel = input.bool(true, "Show timeframe / structure panel", group = groupDisplay)
+showStructurePivots = input.bool(false, "Show STF structure pivots", group = groupDisplay)
+
+// -----------------------------------------------------------------------------
+// Timeframe architecture and validation
+// -----------------------------------------------------------------------------
+string zoneTf = zoneTfInput == "" ? timeframe.period : zoneTfInput
+string structureTf = structureTfInput == "" ? timeframe.period : structureTfInput
+
+float chartTfSeconds = timeframe.in_seconds()
+float zoneTfSeconds = timeframe.in_seconds(zoneTf)
+float structureTfSeconds = timeframe.in_seconds(structureTf)
+
+bool comparableTimeframes = not na(chartTfSeconds) and not na(zoneTfSeconds) and not na(structureTfSeconds)
+bool validTimeframes = comparableTimeframes and zoneTfSeconds >= chartTfSeconds and structureTfSeconds > zoneTfSeconds
+
+// -----------------------------------------------------------------------------
+// Visuals
+// -----------------------------------------------------------------------------
+supportBg     = color.new(color.teal, 85)
+supportBorder = color.new(color.teal, 45)
+resistBg      = color.new(color.red, 85)
+resistBorder  = color.new(color.red, 45)
+staleBg       = color.new(color.gray, 90)
+staleBorder   = color.new(color.gray, 65)
+zoneTextColor = color.black
+
+// -----------------------------------------------------------------------------
+// Confirmed higher-timeframe data
+//
+// We deliberately request the PREVIOUS completed ZTF/STF bar with lookahead_on.
+// That makes the data available from the first chart bar of the next requested
+// timeframe period without leaking information from an unfinished HTF candle.
+// -----------------------------------------------------------------------------
+[zoneBarTime, zoneBarCloseTime, zoneHigh, zoneLow, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] = request.security(
+        syminfo.tickerid,
+        zoneTf,
+        [
+            time[1],
+            time_close[1],
+            high[1],
+            low[1],
+            close[1],
+            ta.atr(atrLength)[1],
+            ta.pivothigh(high, leftBars, rightBars)[1],
+            ta.pivotlow(low, leftBars, rightBars)[1],
+            time[rightBars + 1],
+            volume[rightBars + 1],
+            ta.sma(volume[1], volumeLength)[rightBars + 1],
+            ta.atr(atrLength)[rightBars + 1]
+        ],
+        lookahead = barmerge.lookahead_on
+    )
+
+bool newZonePeriod = timeframe.change(zoneTf)
+bool processZoneBar = validTimeframes and newZonePeriod and not na(zoneBarTime)
+
+volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
+atrReady         = not na(pivotATR)
+birthVolumeRatio = not na(priorVolumeMA) and priorVolumeMA > 0 ? pivotVolume / priorVolumeMA : na
+currentATR       = zoneATR
+
+marketStructureState() =>
+    float swingHigh = ta.pivothigh(high, structureLeftBars, structureRightBars)
+    float swingLow = ta.pivotlow(low, structureLeftBars, structureRightBars)
+    float latestHigh = ta.valuewhen(not na(swingHigh), swingHigh, 0)
+    float previousHigh = ta.valuewhen(not na(swingHigh), swingHigh, 1)
+    float latestLow = ta.valuewhen(not na(swingLow), swingLow, 0)
+    float previousLow = ta.valuewhen(not na(swingLow), swingLow, 1)
+
+    bool ready = not na(latestHigh) and not na(previousHigh) and not na(latestLow) and not na(previousLow)
+    bool bullish = ready and latestHigh > previousHigh and latestLow > previousLow
+    bool bearish = ready and latestHigh < previousHigh and latestLow < previousLow
+
+    bullish ? 1 : bearish ? -1 : 0
+
+int structureState = validTimeframes ? request.security(syminfo.tickerid, structureTf, marketStructureState()[1], lookahead = barmerge.lookahead_on) : 0
+
+[structurePivotHigh, structurePivotLow, structurePivotTime] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, structureLeftBars, structureRightBars)[1], ta.pivotlow(low, structureLeftBars, structureRightBars)[1], time[structureRightBars + 1]], lookahead = barmerge.lookahead_on)
+
+bool newStructurePeriod = timeframe.change(structureTf)
+bool confirmedStructureHigh = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotHigh)
+bool confirmedStructureLow = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotLow)
+
+var label structureHighLabel = na
+var label structureLowLabel = na
+
+if confirmedStructureHigh
+    structureHighLabel := label.new(structurePivotTime, structurePivotHigh, "SH", xloc = xloc.bar_time, style = label.style_triangledown, color = color.red, textcolor = color.red, size = size.small)
+if confirmedStructureLow
+    structureLowLabel := label.new(structurePivotTime, structurePivotLow, "SL", xloc = xloc.bar_time, style = label.style_triangleup, color = color.teal, textcolor = color.teal, size = size.small)
+
+structureStateText(int state) =>
+    state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
+
+// -----------------------------------------------------------------------------
+// Zone model
+// -----------------------------------------------------------------------------
+type SRZone
+    float lower
+    float upper
+    bool isSupport
+    bool active
+    int createdTime
+    int lastInteractionBar
+    int touchCount
+    bool inInteraction
+    int reactionCount
+    bool reactionPending
+    float reactionATRAtTouch
+    int breakCount
+    float birthVolumeRatio
+    int frozenAgeBars
+    float frozenDistanceATR
+    box boxId
+
+var zones = array.new<SRZone>()
+var int zoneBarCounter = 0
+
+// -----------------------------------------------------------------------------
+// Zone helpers
+// -----------------------------------------------------------------------------
+zoneStrengthState(SRZone zone) =>
+    float reactionRate = zone.touchCount > 0 ? float(zone.reactionCount) / zone.touchCount : na
+    zone.touchCount == 0 ? "UNTESTED" : zone.touchCount >= responsiveMinTouches and reactionRate >= responsiveMinRate ? "RESPONSIVE" : "TESTED"
+
+zoneInfo(SRZone zone) =>
+    if not showZoneInfo
+        ""
+    else
+        string state = zone.active ? (zone.isSupport ? "Su" : "Re") : "FROZEN"
+        string strength = zoneStrengthState(zone)
+        string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
+        string baseText = state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
+        baseText + staleText
+
+updateZoneInfo(SRZone zone) =>
+    box.set_text(zone.boxId, zoneInfo(zone))
+    box.set_text_color(zone.boxId, zoneTextColor)
+    box.set_text_size(zone.boxId, size.normal)
+    box.set_text_halign(zone.boxId, zone.active ? text.align_left : text.align_right)
+    box.set_text_valign(zone.boxId, text.align_top)
+
+updateZoneVisuals(SRZone zone) =>
+    box.set_top(zone.boxId, zone.upper)
+    box.set_bottom(zone.boxId, zone.lower)
+    if zone.isSupport
+        box.set_bgcolor(zone.boxId, supportBg)
+        box.set_border_color(zone.boxId, supportBorder)
+    else
+        box.set_bgcolor(zone.boxId, resistBg)
+        box.set_border_color(zone.boxId, resistBorder)
+    updateZoneInfo(zone)
+
+freezeZone(SRZone zone, int ageBars, float distanceATR, int freezeTime) =>
+    zone.active := false
+    zone.inInteraction := false
+    zone.reactionPending := false
+    zone.reactionATRAtTouch := na
+    zone.frozenAgeBars := ageBars
+    zone.frozenDistanceATR := distanceATR
+    box.set_extend(zone.boxId, extend.none)
+    box.set_right(zone.boxId, freezeTime)
+    box.set_bgcolor(zone.boxId, staleBg)
+    box.set_border_color(zone.boxId, staleBorder)
+    updateZoneInfo(zone)
+    zone
+
+zonesCloseEnough(SRZone a, SRZone b, float gapTolerance) =>
+    bool overlaps = a.lower <= b.upper and b.lower <= a.upper
+    float gap = a.upper < b.lower ? b.lower - a.upper : b.upper < a.lower ? a.lower - b.upper : 0.0
+    overlaps or gap <= gapTolerance
+
+mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
+    bool merged = false
+    if targetIndex >= 0 and targetIndex < array.size(zones)
+        SRZone target = array.get(zones, targetIndex)
+        if target.active and incoming.active and target.isSupport == incoming.isSupport and zonesCloseEnough(target, incoming, gapTolerance)
+            target.lower := math.min(target.lower, incoming.lower)
+            target.upper := math.max(target.upper, incoming.upper)
+            target.createdTime := math.min(target.createdTime, incoming.createdTime)
+            target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
+            target.touchCount := math.max(target.touchCount, incoming.touchCount)
+            target.inInteraction := target.inInteraction or incoming.inInteraction
+            target.reactionCount := math.max(target.reactionCount, incoming.reactionCount)
+            bool targetPending = target.reactionPending
+            bool incomingPending = incoming.reactionPending
+            float targetReactionATR = target.reactionATRAtTouch
+            float incomingReactionATR = incoming.reactionATRAtTouch
+            target.reactionPending := targetPending or incomingPending
+            target.reactionATRAtTouch := targetPending and incomingPending ? math.max(targetReactionATR, incomingReactionATR) : targetPending ? targetReactionATR : incomingPending ? incomingReactionATR : na
+            target.breakCount := math.max(target.breakCount, incoming.breakCount)
+            target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
+            box.set_left(target.boxId, math.min(box.get_left(target.boxId), box.get_left(incoming.boxId)))
+            box.delete(incoming.boxId)
+            updateZoneVisuals(target)
+            array.set(zones, targetIndex, target)
+            merged := true
+    merged
+
+addOrMergeZone(SRZone incoming) =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    int mergeIndex = -1
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone existing = array.get(zones, i)
+            if mergeIndex == -1 and existing.active and existing.isSupport == incoming.isSupport and zonesCloseEnough(existing, incoming, gapTolerance)
+                mergeIndex := i
+
+    bool merged = false
+    if mergeIndex >= 0
+        merged := mergeZoneAt(mergeIndex, incoming, gapTolerance)
+    else
+        updateZoneInfo(incoming)
+        array.push(zones, incoming)
+    merged
+
+mergeActiveZones() =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    bool changed = true
+    while changed
+        changed := false
+        int count = array.size(zones)
+        if count > 1
+            for i = 0 to count - 2
+                if not changed
+                    SRZone a = array.get(zones, i)
+                    if a.active
+                        for j = i + 1 to count - 1
+                            if not changed
+                                SRZone b = array.get(zones, j)
+                                if b.active and a.isSupport == b.isSupport and zonesCloseEnough(a, b, gapTolerance)
+                                    a.lower := math.min(a.lower, b.lower)
+                                    a.upper := math.max(a.upper, b.upper)
+                                    a.createdTime := math.min(a.createdTime, b.createdTime)
+                                    a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
+                                    a.touchCount := math.max(a.touchCount, b.touchCount)
+                                    a.inInteraction := a.inInteraction or b.inInteraction
+                                    a.reactionCount := math.max(a.reactionCount, b.reactionCount)
+                                    bool aPending = a.reactionPending
+                                    bool bPending = b.reactionPending
+                                    float aReactionATR = a.reactionATRAtTouch
+                                    float bReactionATR = b.reactionATRAtTouch
+                                    a.reactionPending := aPending or bPending
+                                    a.reactionATRAtTouch := aPending and bPending ? math.max(aReactionATR, bReactionATR) : aPending ? aReactionATR : bPending ? bReactionATR : na
+                                    a.breakCount := math.max(a.breakCount, b.breakCount)
+                                    a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
+                                    box.set_left(a.boxId, math.min(box.get_left(a.boxId), box.get_left(b.boxId)))
+                                    box.delete(b.boxId)
+                                    updateZoneVisuals(a)
+                                    array.set(zones, i, a)
+                                    array.remove(zones, j)
+                                    changed := true
+
+// -----------------------------------------------------------------------------
+// Zone creation
+// -----------------------------------------------------------------------------
+createSupportZone(float pivotPrice) =>
+    float lower = pivotPrice
+    float upper = pivotPrice + pivotATR * zoneMultiplier
+    box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
+    SRZone zone = SRZone.new(lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    addOrMergeZone(zone)
+
+createResistanceZone(float pivotPrice) =>
+    float upper = pivotPrice
+    float lower = pivotPrice - pivotATR * zoneMultiplier
+    box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
+    SRZone zone = SRZone.new(lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    addOrMergeZone(zone)
+
+// -----------------------------------------------------------------------------
+// Zone engine
+//
+// Every state transition below runs ONCE per completed ZTF bar. This is the
+// critical rule that keeps pivots, ATR, volume, touches, reactions, breaks and
+// bar-based staleness in ZTF semantics even when displayed on a lower CTF.
+// -----------------------------------------------------------------------------
+if processZoneBar
+    zoneBarCounter += 1
+
+    if volumeQualified and atrReady
+        if not na(pivotLow)
+            createSupportZone(pivotLow)
+        if not na(pivotHigh)
+            createResistanceZone(pivotHigh)
+
+    bool roleChanged = false
+
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone zone = array.get(zones, i)
+
+            if zone.active
+                float breakTolerance = currentATR * breakToleranceATR
+                bool broken = not na(currentATR) and (zone.isSupport ? zoneClose < zone.lower - breakTolerance : zoneClose > zone.upper + breakTolerance)
+
+                if broken
+                    // A confirmed break cancels any unconfirmed reaction from
+                    // the current touch. Breaks remain independent evidence.
+                    zone.inInteraction := false
+                    zone.reactionPending := false
+                    zone.reactionATRAtTouch := na
+                    zone.breakCount += 1
+                    zone.lastInteractionBar := zoneBarCounter
+
+                    if zone.breakCount >= maxBreaks
+                        zone := freezeZone(zone, na, na, zoneBarCloseTime)
+                    else
+                        zone.isSupport := not zone.isSupport
+                        updateZoneVisuals(zone)
+                        roleChanged := true
+                else
+                    bool interacting = zoneHigh >= zone.lower and zoneLow <= zone.upper
+
+                    if interacting
+                        zone.lastInteractionBar := zoneBarCounter
+                        if not zone.inInteraction
+                            // A new touch episode replaces any still-unconfirmed
+                            // reaction from the previous episode.
+                            zone.inInteraction := true
+                            zone.touchCount += 1
+                            zone.reactionPending := not na(currentATR)
+                            zone.reactionATRAtTouch := currentATR
+                            updateZoneInfo(zone)
+                    else
+                        // One fully outside completed ZTF bar ends the episode.
+                        zone.inInteraction := false
+
+                        if zone.reactionPending and not na(zone.reactionATRAtTouch)
+                            float requiredMove = zone.reactionATRAtTouch * reactionATR
+                            bool reacted = zone.isSupport ? zoneHigh >= zone.upper + requiredMove : zoneLow <= zone.lower - requiredMove
+                            if reacted
+                                zone.reactionCount += 1
+                                zone.reactionPending := false
+                                zone.reactionATRAtTouch := na
+                                updateZoneInfo(zone)
+
+                if zone.active
+                    float distanceFromZone = zoneClose > zone.upper ? zoneClose - zone.upper : zoneClose < zone.lower ? zone.lower - zoneClose : 0.0
+                    int ageBars = zoneBarCounter - zone.lastInteractionBar
+                    float distanceATR = not na(currentATR) and currentATR > 0 ? distanceFromZone / currentATR : na
+                    bool oldEnough = ageBars > staleBars
+                    bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
+                    if oldEnough and farEnough
+                        zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
+
+                array.set(zones, i, zone)
+
+    if roleChanged
+        mergeActiveZones()
+
+    int maxStoredZones = 450
+    if array.size(zones) > maxStoredZones
+        SRZone oldest = array.shift(zones)
+        box.delete(oldest.boxId)
+
+// -----------------------------------------------------------------------------
+// Strategy v1
+//
+// Entry confirmation is intentionally evaluated on the chart timeframe (CTF):
+// price must interact with a direction-compatible active ZTF zone and then
+// close back through the favorable boundary. Stops/targets are frozen at entry.
+// -----------------------------------------------------------------------------
+var bool longSetupPending = false
+var bool shortSetupPending = false
+var float longSetupLower = na
+var float longSetupUpper = na
+var float shortSetupLower = na
+var float shortSetupUpper = na
+var float longSetupATR = na
+var float shortSetupATR = na
+
+if validTimeframes and strategy.position_size == 0
+    // Arm a setup from the first matching active zone touched on this CTF bar.
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone zone = array.get(zones, i)
+            if zone.active
+                bool ctfInteracts = high >= zone.lower and low <= zone.upper
+                if structureState == 1 and zone.isSupport and ctfInteracts and not longSetupPending
+                    longSetupPending := true
+                    longSetupLower := zone.lower
+                    longSetupUpper := zone.upper
+                    longSetupATR := currentATR
+                if structureState == -1 and not zone.isSupport and ctfInteracts and not shortSetupPending
+                    shortSetupPending := true
+                    shortSetupLower := zone.lower
+                    shortSetupUpper := zone.upper
+                    shortSetupATR := currentATR
+
+    // A pending setup is cancelled if STF no longer supports its direction.
+    if longSetupPending and structureState != 1
+        longSetupPending := false
+    if shortSetupPending and structureState != -1
+        shortSetupPending := false
+
+    bool longSignal = longSetupPending and close > longSetupUpper
+    bool shortSignal = shortSetupPending and close < shortSetupLower
+
+    if longSignal and not na(longSetupATR)
+        float entryPrice = close
+        float stopPrice = longSetupLower - longSetupATR * stopBufferATR
+        float risk = entryPrice - stopPrice
+        if risk > syminfo.mintick
+            float minimumTarget = entryPrice + risk * minimumRewardR
+            float targetPrice = minimumTarget
+            float nearestResistance = na
+            if array.size(zones) > 0
+                for i = 0 to array.size(zones) - 1
+                    SRZone targetZone = array.get(zones, i)
+                    if targetZone.active and not targetZone.isSupport and targetZone.lower >= minimumTarget
+                        nearestResistance := na(nearestResistance) ? targetZone.lower : math.min(nearestResistance, targetZone.lower)
+            if not na(nearestResistance)
+                targetPrice := nearestResistance
+            strategy.entry("Long", strategy.long)
+            strategy.exit("Long Exit", "Long", stop = stopPrice, limit = targetPrice)
+        longSetupPending := false
+        shortSetupPending := false
+
+    if shortSignal and not na(shortSetupATR) and strategy.position_size == 0
+        float entryPrice = close
+        float stopPrice = shortSetupUpper + shortSetupATR * stopBufferATR
+        float risk = stopPrice - entryPrice
+        if risk > syminfo.mintick
+            float minimumTarget = entryPrice - risk * minimumRewardR
+            float targetPrice = minimumTarget
+            float nearestSupport = na
+            if array.size(zones) > 0
+                for i = 0 to array.size(zones) - 1
+                    SRZone targetZone = array.get(zones, i)
+                    if targetZone.active and targetZone.isSupport and targetZone.upper <= minimumTarget
+                        nearestSupport := na(nearestSupport) ? targetZone.upper : math.max(nearestSupport, targetZone.upper)
+            if not na(nearestSupport)
+                targetPrice := nearestSupport
+            strategy.entry("Short", strategy.short)
+            strategy.exit("Short Exit", "Short", stop = stopPrice, limit = targetPrice)
+        longSetupPending := false
+        shortSetupPending := false
+else if not validTimeframes
+    longSetupPending := false
+    shortSetupPending := false
+
+// -----------------------------------------------------------------------------
+// Context / validation panel
+// -----------------------------------------------------------------------------
+var table contextPanel = table.new(position.top_right, 2, 5, border_width = 1)
+
+if barstate.islast
+    if showContextPanel
+        table.cell(contextPanel, 0, 0, "CTF")
+        table.cell(contextPanel, 1, 0, timeframe.period)
+        table.cell(contextPanel, 0, 1, "ZTF")
+        table.cell(contextPanel, 1, 1, zoneTf)
+        table.cell(contextPanel, 0, 2, "STF")
+        table.cell(contextPanel, 1, 2, structureTf)
+
+        if validTimeframes
+            table.cell(contextPanel, 0, 3, "Structure")
+            table.cell(contextPanel, 1, 3, structureStateText(structureState))
+            table.cell(contextPanel, 0, 4, "TF rule")
+            table.cell(contextPanel, 1, 4, "STF > ZTF >= CTF")
+        else
+            string validationMessage = comparableTimeframes ? "INVALID: STF > ZTF >= CTF" : "INVALID / unsupported chart TF"
+            table.cell(contextPanel, 0, 3, "Timeframes")
+            table.cell(contextPanel, 1, 3, validationMessage)
+            table.cell(contextPanel, 0, 4, "Status")
+            table.cell(contextPanel, 1, 4, "Calculations disabled")
+    else
+        table.clear(contextPanel, 0, 0, 1, 4)
