@@ -199,7 +199,7 @@ zoneInfo(SRZone zone) =>
         string state = zone.active ? (zone.isSupport ? "Su" : "Re") : "FROZEN"
         string strength = zoneStrengthState(zone)
         string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
-        string baseText = state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string baseText = "Z#" + str.tostring(zone.id) + " | " + state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
         string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
         baseText + staleText
 
