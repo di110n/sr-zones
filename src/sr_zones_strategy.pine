@@ -360,10 +360,23 @@ if processZoneBar
                     zone.breakCount += 1
                     zone.lastInteractionBar := zoneBarCounter
 
+                    if debugStrategy
+                        log.info("ZONE_BREAK | old_role={0} | zone={1}-{2} | T={3} | R={4} | B={5}/{6} | ZTF_close={7} | tolerance={8}",
+                            zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            zone.touchCount, zone.reactionCount, zone.breakCount, maxBreaks, str.tostring(zoneClose, format.mintick), str.tostring(breakTolerance, format.mintick))
                     if zone.breakCount >= maxBreaks
+                        if debugStrategy
+                            log.info("ZONE_FREEZE | reason=MAX_BREAKS | role={0} | zone={1}-{2} | T={3} | R={4} | B={5}",
+                                zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                zone.touchCount, zone.reactionCount, zone.breakCount)
                         zone := freezeZone(zone, na, na, zoneBarCloseTime)
                     else
+                        bool oldRoleSupport = zone.isSupport
                         zone.isSupport := not zone.isSupport
+                        if debugStrategy
+                            log.info("ZONE_ROLE_FLIP | from={0} | to={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
+                                oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
+                                str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount)
                         updateZoneVisuals(zone)
                         roleChanged := true
                 else
@@ -378,6 +391,11 @@ if processZoneBar
                             zone.touchCount += 1
                             zone.reactionPending := not na(currentATR)
                             zone.reactionATRAtTouch := currentATR
+                            if debugStrategy
+                                log.info("ZONE_TOUCH | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | ZTF O/H/L/C={7}/{8}/{9}/{10} | ATR={11}",
+                                    zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                    zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone),
+                                    "n/a", str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick), str.tostring(currentATR, format.mintick))
                             updateZoneInfo(zone)
                     else
                         // One fully outside completed ZTF bar ends the episode.
@@ -388,6 +406,11 @@ if processZoneBar
                             bool reacted = zone.isSupport ? zoneHigh >= zone.upper + requiredMove : zoneLow <= zone.lower - requiredMove
                             if reacted
                                 zone.reactionCount += 1
+                                if debugStrategy
+                                    log.info("ZONE_REACTION | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | requiredMove={6} | ZTF H/L/C={7}/{8}/{9}",
+                                        zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                        zone.touchCount, zone.reactionCount, zone.breakCount, str.tostring(requiredMove, format.mintick),
+                                        str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick))
                                 zone.reactionPending := false
                                 zone.reactionATRAtTouch := na
                                 updateZoneInfo(zone)
@@ -399,6 +422,10 @@ if processZoneBar
                     bool oldEnough = ageBars > staleBars
                     bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
                     if oldEnough and farEnough
+                        if debugStrategy
+                            log.info("ZONE_FREEZE | reason=STALE | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | age={6} | distanceATR={7}",
+                                zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                zone.touchCount, zone.reactionCount, zone.breakCount, ageBars, str.tostring(distanceATR, "#.##"))
                         zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
 
                 array.set(zones, i, zone)
