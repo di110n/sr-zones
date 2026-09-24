@@ -492,6 +492,10 @@ var float activeInitialRisk = na
 var float activeStopPrice = na
 var float activeTargetPrice = na
 var int activeEntryBar = na
+var int nextTradeId = 1
+var int activeTradeId = na
+var int activeTradeZoneId = na
+var int activeTradeTouchCount = na
 
 if validTimeframes and strategy.position_size == 0 and strategy.position_size[1] == 0
     // Arm a setup from the first matching active zone touched on this CTF bar.
@@ -566,8 +570,12 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             activeStopPrice := stopPrice
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
+            activeTradeId := nextTradeId
+            nextTradeId += 1
+            activeTradeZoneId := longSetupZoneId
+            activeTradeTouchCount := longSetupTouchCount
             if debugStrategy
-                log.info("ENTER_LONG | Z#{0} | STF={1} | setup_zone={2}-{3} | entry={4} | SL={5} | TP={6} | risk={7} | rewardR={8} | CTF O/H/L/C={9}/{10}/{11}/{12}", longSetupZoneId, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ENTER_LONG | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Long", strategy.long)
             strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
@@ -593,8 +601,12 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             activeStopPrice := stopPrice
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
+            activeTradeId := nextTradeId
+            nextTradeId += 1
+            activeTradeZoneId := shortSetupZoneId
+            activeTradeTouchCount := shortSetupTouchCount
             if debugStrategy
-                log.info("ENTER_SHORT | Z#{0} | STF={1} | setup_zone={2}-{3} | entry={4} | SL={5} | TP={6} | risk={7} | rewardR={8} | CTF O/H/L/C={9}/{10}/{11}/{12}", shortSetupZoneId, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ENTER_SHORT | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Short", strategy.short)
             strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
@@ -625,12 +637,15 @@ if strategy.position_size == 0 and strategy.position_size[1] != 0
         bool wasLong = strategy.position_size[1] > 0
         float exitReference = close
         string exitReason = wasLong ? (low <= activeStopPrice ? "SL" : high >= activeTargetPrice ? "TP" : "EXIT") : (high >= activeStopPrice ? "SL" : low <= activeTargetPrice ? "TP" : "EXIT")
-        log.info("CLOSE_{0} | reason={1} | entry={2} | exit_bar_close={3} | SL={4} | TP={5} | bars={6} | CTF O/H/L/C={7}/{8}/{9}/{10}", wasLong ? "LONG" : "SHORT", exitReason, str.tostring(activeEntryPrice, format.mintick), str.tostring(exitReference, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), na(activeEntryBar) ? na : bar_index - activeEntryBar, str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+        log.info("CLOSE_{0} | Trade#{1} | Z#{2} | touch={3} | reason={4} | entry={5} | exit_bar_close={6} | SL={7} | TP={8} | bars={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", wasLong ? "LONG" : "SHORT", activeTradeId, activeTradeZoneId, activeTradeTouchCount, exitReason, str.tostring(activeEntryPrice, format.mintick), str.tostring(exitReference, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), na(activeEntryBar) ? na : bar_index - activeEntryBar, str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
     activeEntryPrice := na
     activeInitialRisk := na
     activeStopPrice := na
     activeTargetPrice := na
     activeEntryBar := na
+    activeTradeId := na
+    activeTradeZoneId := na
+    activeTradeTouchCount := na
 
 // -----------------------------------------------------------------------------
 // Context / validation panel
