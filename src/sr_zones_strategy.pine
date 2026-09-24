@@ -44,6 +44,9 @@ groupStrategy = "Strategy"
 stopBufferATR = input.float(0.20, "Stop buffer (ZTF ATR)", minval = 0.0, step = 0.01, group = groupStrategy)
 minimumRewardR = input.float(2.0, "Minimum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
 tradeDirection = input.string("Both", "Trade direction", options = ["Both", "Long only", "Short only"], group = groupStrategy)
+tradeNeutralStructure = input.bool(true, "Trade neutral structure", group = groupStrategy)
+breakevenEnabled = input.bool(false, "Breakeven enabled", group = groupStrategy)
+breakevenTriggerR = input.float(1.0, "Breakeven trigger (R)", minval = 0.1, step = 0.1, group = groupStrategy)
 allowLong = tradeDirection != "Short only"
 allowShort = tradeDirection != "Long only"
 
@@ -422,6 +425,10 @@ var float shortSetupLower = na
 var float shortSetupUpper = na
 var float longSetupATR = na
 var float shortSetupATR = na
+var float activeEntryPrice = na
+var float activeInitialRisk = na
+var float activeStopPrice = na
+var float activeTargetPrice = na
 
 if validTimeframes and strategy.position_size == 0
     // Arm a setup from the first matching active zone touched on this CTF bar.
@@ -430,21 +437,23 @@ if validTimeframes and strategy.position_size == 0
             SRZone zone = array.get(zones, i)
             if zone.active
                 bool ctfInteracts = high >= zone.lower and low <= zone.upper
-                if allowLong and structureState == 1 and zone.isSupport and ctfInteracts and not longSetupPending
+                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and ctfInteracts and not longSetupPending
                     longSetupPending := true
                     longSetupLower := zone.lower
                     longSetupUpper := zone.upper
                     longSetupATR := currentATR
-                if allowShort and structureState == -1 and not zone.isSupport and ctfInteracts and not shortSetupPending
+                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
                     shortSetupATR := currentATR
 
-    // A pending setup is cancelled if STF no longer supports its direction.
-    if longSetupPending and structureState != 1
+    // A pending setup is cancelled if STF no longer permits its direction.
+    bool longStructureAllowed = structureState == 1 or (tradeNeutralStructure and structureState == 0)
+    bool shortStructureAllowed = structureState == -1 or (tradeNeutralStructure and structureState == 0)
+    if longSetupPending and not longStructureAllowed
         longSetupPending := false
-    if shortSetupPending and structureState != -1
+    if shortSetupPending and not shortStructureAllowed
         shortSetupPending := false
 
     bool longSignal = allowLong and longSetupPending and close > longSetupUpper
@@ -465,8 +474,12 @@ if validTimeframes and strategy.position_size == 0
                         nearestResistance := na(nearestResistance) ? targetZone.lower : math.min(nearestResistance, targetZone.lower)
             if not na(nearestResistance)
                 targetPrice := nearestResistance
+            activeEntryPrice := entryPrice
+            activeInitialRisk := risk
+            activeStopPrice := stopPrice
+            activeTargetPrice := targetPrice
             strategy.entry("Long", strategy.long)
-            strategy.exit("Long Exit", "Long", stop = stopPrice, limit = targetPrice)
+            strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
         shortSetupPending := false
 
@@ -485,13 +498,34 @@ if validTimeframes and strategy.position_size == 0
                         nearestSupport := na(nearestSupport) ? targetZone.upper : math.max(nearestSupport, targetZone.upper)
             if not na(nearestSupport)
                 targetPrice := nearestSupport
+            activeEntryPrice := entryPrice
+            activeInitialRisk := risk
+            activeStopPrice := stopPrice
+            activeTargetPrice := targetPrice
             strategy.entry("Short", strategy.short)
-            strategy.exit("Short Exit", "Short", stop = stopPrice, limit = targetPrice)
+            strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
         shortSetupPending := false
 else if not validTimeframes
     longSetupPending := false
     shortSetupPending := false
+
+// Optional breakeven management. Disabled by default so adding the feature does
+// not change the current baseline backtest until explicitly enabled.
+if strategy.position_size > 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
+    if breakevenEnabled and high >= activeEntryPrice + activeInitialRisk * breakevenTriggerR
+        activeStopPrice := math.max(activeStopPrice, activeEntryPrice)
+    strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
+else if strategy.position_size < 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
+    if breakevenEnabled and low <= activeEntryPrice - activeInitialRisk * breakevenTriggerR
+        activeStopPrice := math.min(activeStopPrice, activeEntryPrice)
+    strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    activeEntryPrice := na
+    activeInitialRisk := na
+    activeStopPrice := na
+    activeTargetPrice := na
 
 // -----------------------------------------------------------------------------
 // Context / validation panel
