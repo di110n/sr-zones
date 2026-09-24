@@ -321,22 +321,20 @@ mergeActiveZones() =>
 // -----------------------------------------------------------------------------
 // Zone creation
 // -----------------------------------------------------------------------------
-createSupportZone(float pivotPrice) =>
+createSupportZone(float pivotPrice, int zoneId) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
-    SRZone zone = SRZone.new(nextZoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
-    nextZoneId += 1
+    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     if debugStrategy
         log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
     addOrMergeZone(zone)
 
-createResistanceZone(float pivotPrice) =>
+createResistanceZone(float pivotPrice, int zoneId) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
-    SRZone zone = SRZone.new(nextZoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
-    nextZoneId += 1
+    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 // -----------------------------------------------------------------------------
@@ -351,9 +349,11 @@ if processZoneBar
 
     if volumeQualified and atrReady
         if not na(pivotLow)
-            createSupportZone(pivotLow)
+            createSupportZone(pivotLow, nextZoneId)
+            nextZoneId += 1
         if not na(pivotHigh)
-            createResistanceZone(pivotHigh)
+            createResistanceZone(pivotHigh, nextZoneId)
+            nextZoneId += 1
 
     bool roleChanged = false
 
