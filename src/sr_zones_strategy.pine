@@ -152,6 +152,7 @@ structureStateText(int state) =>
 // Zone model
 // -----------------------------------------------------------------------------
 type SRZone
+    int id
     float lower
     float upper
     bool isSupport
@@ -171,6 +172,7 @@ type SRZone
 
 var zones = array.new<SRZone>()
 var int zoneBarCounter = 0
+var int nextZoneId = 1
 
 // -----------------------------------------------------------------------------
 // Zone helpers
@@ -248,6 +250,10 @@ mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
             target.breakCount := math.max(target.breakCount, incoming.breakCount)
             target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
             box.set_left(target.boxId, math.min(box.get_left(target.boxId), box.get_left(incoming.boxId)))
+            if debugStrategy
+                log.info("ZONE_MERGE | survivor=Z#{0} | absorbed=Z#{1} | role={2} | merged_zone={3}-{4} | T={5} | R={6} | B={7}",
+                    target.id, incoming.id, target.isSupport ? "SUPPORT" : "RESISTANCE",
+                    str.tostring(target.lower, format.mintick), str.tostring(target.upper, format.mintick), target.touchCount, target.reactionCount, target.breakCount)
             box.delete(incoming.boxId)
             updateZoneVisuals(target)
             array.set(zones, targetIndex, target)
@@ -302,6 +308,10 @@ mergeActiveZones() =>
                                     a.breakCount := math.max(a.breakCount, b.breakCount)
                                     a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
                                     box.set_left(a.boxId, math.min(box.get_left(a.boxId), box.get_left(b.boxId)))
+                                    if debugStrategy
+                                        log.info("ZONE_MERGE | survivor=Z#{0} | absorbed=Z#{1} | role={2} | merged_zone={3}-{4} | T={5} | R={6} | B={7}",
+                                            a.id, b.id, a.isSupport ? "SUPPORT" : "RESISTANCE",
+                                            str.tostring(a.lower, format.mintick), str.tostring(a.upper, format.mintick), a.touchCount, a.reactionCount, a.breakCount)
                                     box.delete(b.boxId)
                                     updateZoneVisuals(a)
                                     array.set(zones, i, a)
@@ -315,14 +325,18 @@ createSupportZone(float pivotPrice) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
-    SRZone zone = SRZone.new(lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(nextZoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    nextZoneId += 1
+    if debugStrategy
+        log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
-    SRZone zone = SRZone.new(lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(nextZoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    nextZoneId += 1
     addOrMergeZone(zone)
 
 // -----------------------------------------------------------------------------
@@ -361,21 +375,21 @@ if processZoneBar
                     zone.lastInteractionBar := zoneBarCounter
 
                     if debugStrategy
-                        log.info("ZONE_BREAK | old_role={0} | zone={1}-{2} | T={3} | R={4} | B={5}/{6} | ZTF_close={7} | tolerance={8}",
-                            zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                        log.info("ZONE_BREAK | Z#{0} | old_role={1} | zone={2}-{3} | T={4} | R={5} | B={6}/{7} | ZTF_close={8} | tolerance={9}",
+                            zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
                             zone.touchCount, zone.reactionCount, zone.breakCount, maxBreaks, str.tostring(zoneClose, format.mintick), str.tostring(breakTolerance, format.mintick))
                     if zone.breakCount >= maxBreaks
                         if debugStrategy
-                            log.info("ZONE_FREEZE | reason=MAX_BREAKS | role={0} | zone={1}-{2} | T={3} | R={4} | B={5}",
-                                zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            log.info("ZONE_FREEZE | Z#{0} | reason=MAX_BREAKS | role={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
+                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
                                 zone.touchCount, zone.reactionCount, zone.breakCount)
                         zone := freezeZone(zone, na, na, zoneBarCloseTime)
                     else
                         bool oldRoleSupport = zone.isSupport
                         zone.isSupport := not zone.isSupport
                         if debugStrategy
-                            log.info("ZONE_ROLE_FLIP | from={0} | to={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
-                                oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
+                            log.info("ZONE_ROLE_FLIP | Z#{0} | from={1} | to={2} | zone={3}-{4} | T={5} | R={6} | B={7}",
+                                zone.id, oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
                                 str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount)
                         updateZoneVisuals(zone)
                         roleChanged := true
@@ -392,8 +406,8 @@ if processZoneBar
                             zone.reactionPending := not na(currentATR)
                             zone.reactionATRAtTouch := currentATR
                             if debugStrategy
-                                log.info("ZONE_TOUCH | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | ZTF O/H/L/C={7}/{8}/{9}/{10} | ATR={11}",
-                                    zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                log.info("ZONE_TOUCH | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | ZTF O/H/L/C={8}/{9}/{10}/{11} | ATR={12}",
+                                    zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
                                     zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone),
                                     "n/a", str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick), str.tostring(currentATR, format.mintick))
                             updateZoneInfo(zone)
@@ -407,8 +421,8 @@ if processZoneBar
                             if reacted
                                 zone.reactionCount += 1
                                 if debugStrategy
-                                    log.info("ZONE_REACTION | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | requiredMove={6} | ZTF H/L/C={7}/{8}/{9}",
-                                        zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                    log.info("ZONE_REACTION | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | requiredMove={7} | ZTF H/L/C={8}/{9}/{10}",
+                                        zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
                                         zone.touchCount, zone.reactionCount, zone.breakCount, str.tostring(requiredMove, format.mintick),
                                         str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick))
                                 zone.reactionPending := false
@@ -423,8 +437,8 @@ if processZoneBar
                     bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
                     if oldEnough and farEnough
                         if debugStrategy
-                            log.info("ZONE_FREEZE | reason=STALE | role={0} | zone={1}-{2} | T={3} | R={4} | B={5} | age={6} | distanceATR={7}",
-                                zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            log.info("ZONE_FREEZE | Z#{0} | reason=STALE | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | age={7} | distanceATR={8}",
+                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
                                 zone.touchCount, zone.reactionCount, zone.breakCount, ageBars, str.tostring(distanceATR, "#.##"))
                         zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
 
@@ -453,6 +467,8 @@ var float shortSetupLower = na
 var float shortSetupUpper = na
 var float longSetupATR = na
 var float shortSetupATR = na
+var int longSetupZoneId = na
+var int shortSetupZoneId = na
 var float activeEntryPrice = na
 var float activeInitialRisk = na
 var float activeStopPrice = na
@@ -471,26 +487,28 @@ if validTimeframes and strategy.position_size == 0
                     longSetupLower := zone.lower
                     longSetupUpper := zone.upper
                     longSetupATR := currentATR
+                    longSetupZoneId := zone.id
                     if debugStrategy
-                        log.info("ARM_LONG | STF={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | CTF O/H/L/C={7}/{8}/{9}/{10} | ZTF_ATR={11}", structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+                        log.info("ARM_LONG | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
                 if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
                     shortSetupATR := currentATR
+                    shortSetupZoneId := zone.id
                     if debugStrategy
-                        log.info("ARM_SHORT | STF={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | CTF O/H/L/C={7}/{8}/{9}/{10} | ZTF_ATR={11}", structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+                        log.info("ARM_SHORT | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
 
     // A pending setup is cancelled if STF no longer permits its direction.
     bool longStructureAllowed = structureState == 1 or (tradeNeutralStructure and structureState == 0)
     bool shortStructureAllowed = structureState == -1 or (tradeNeutralStructure and structureState == 0)
     if longSetupPending and not longStructureAllowed
         if debugStrategy
-            log.info("CANCEL_LONG | reason=STF | STF={0} | pending_zone={1}-{2} | CTF_close={3}", structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(close, format.mintick))
+            log.info("CANCEL_LONG | Z#{0} | reason=STF | STF={1} | pending_zone={2}-{3} | CTF_close={4}", longSetupZoneId, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(close, format.mintick))
         longSetupPending := false
     if shortSetupPending and not shortStructureAllowed
         if debugStrategy
-            log.info("CANCEL_SHORT | reason=STF | STF={0} | pending_zone={1}-{2} | CTF_close={3}", structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(close, format.mintick))
+            log.info("CANCEL_SHORT | Z#{0} | reason=STF | STF={1} | pending_zone={2}-{3} | CTF_close={4}", shortSetupZoneId, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(close, format.mintick))
         shortSetupPending := false
 
     bool longSignal = allowLong and longSetupPending and close > longSetupUpper
@@ -517,7 +535,7 @@ if validTimeframes and strategy.position_size == 0
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
             if debugStrategy
-                log.info("ENTER_LONG | STF={0} | setup_zone={1}-{2} | entry={3} | SL={4} | TP={5} | risk={6} | rewardR={7} | CTF O/H/L/C={8}/{9}/{10}/{11}", structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ENTER_LONG | Z#{0} | STF={1} | setup_zone={2}-{3} | entry={4} | SL={5} | TP={6} | risk={7} | rewardR={8} | CTF O/H/L/C={9}/{10}/{11}/{12}", longSetupZoneId, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Long", strategy.long)
             strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
@@ -544,7 +562,7 @@ if validTimeframes and strategy.position_size == 0
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
             if debugStrategy
-                log.info("ENTER_SHORT | STF={0} | setup_zone={1}-{2} | entry={3} | SL={4} | TP={5} | risk={6} | rewardR={7} | CTF O/H/L/C={8}/{9}/{10}/{11}", structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ENTER_SHORT | Z#{0} | STF={1} | setup_zone={2}-{3} | entry={4} | SL={5} | TP={6} | risk={7} | rewardR={8} | CTF O/H/L/C={9}/{10}/{11}/{12}", shortSetupZoneId, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Short", strategy.short)
             strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
