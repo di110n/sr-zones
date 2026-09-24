@@ -445,14 +445,14 @@ if validTimeframes and strategy.position_size == 0
                     longSetupUpper := zone.upper
                     longSetupATR := currentATR
                     if debugStrategy
-                        label.new(bar_index, low, "ARM L\nSTF:" + structureText + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_up, textcolor = color.white, color = color.new(color.blue, 20), size = size.tiny)
+                        label.new(bar_index, low, "ARM L\nSTF:" + (structureState == 1 ? "BULLISH" : structureState == -1 ? "BEARISH" : "NEUTRAL") + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_up, textcolor = color.white, color = color.new(color.blue, 20), size = size.tiny)
                 if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
                     shortSetupATR := currentATR
                     if debugStrategy
-                        label.new(bar_index, high, "ARM S\nSTF:" + structureText + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_down, textcolor = color.white, color = color.new(color.orange, 20), size = size.tiny)
+                        label.new(bar_index, high, "ARM S\nSTF:" + (structureState == 1 ? "BULLISH" : structureState == -1 ? "BEARISH" : "NEUTRAL") + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_down, textcolor = color.white, color = color.new(color.orange, 20), size = size.tiny)
 
     // A pending setup is cancelled if STF no longer permits its direction.
     bool longStructureAllowed = structureState == 1 or (tradeNeutralStructure and structureState == 0)
