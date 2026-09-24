@@ -149,6 +149,17 @@ structureStateText(int state) =>
     state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
 
 // -----------------------------------------------------------------------------
+// Debug run metadata
+// -----------------------------------------------------------------------------
+var bool debugRunHeaderLogged = false
+if debugStrategy and not debugRunHeaderLogged and validTimeframes
+    log.info("RUN_CONFIG | symbol={0} | CTF={1} | ZTF={2} | STF={3} | zonePivot={4}/{5} | structurePivot={6}/{7} | volumeLen={8} | volumeMult={9} | ATRLen={10} | zoneATRMult={11} | maxBreaks={12} | breakTolATR={13} | staleBars={14} | staleDistanceATR={15} | mergeGapATR={16} | reactionATR={17} | responsiveMinTouches={18} | responsiveMinRate={19}",
+        syminfo.tickerid, timeframe.period, zoneTf, structureTf, leftBars, rightBars, structureLeftBars, structureRightBars, volumeLength, str.tostring(volumeMultiplier), atrLength, str.tostring(zoneMultiplier), maxBreaks, str.tostring(breakToleranceATR), staleBars, str.tostring(staleDistanceATR), str.tostring(mergeGapATR), str.tostring(reactionATR), responsiveMinTouches, str.tostring(responsiveMinRate))
+    log.info("RUN_STRATEGY | stopBufferATR={0} | minimumRewardR={1} | direction={2} | tradeNeutral={3} | breakeven={4} | breakevenTriggerR={5} | initialCapital={6} | commission/model=see Strategy Properties",
+        str.tostring(stopBufferATR), str.tostring(minimumRewardR), tradeDirection, tradeNeutralStructure, breakevenEnabled, str.tostring(breakevenTriggerR), str.tostring(strategy.initial_capital))
+    debugRunHeaderLogged := true
+
+// -----------------------------------------------------------------------------
 // Zone model
 // -----------------------------------------------------------------------------
 type SRZone
