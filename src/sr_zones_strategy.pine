@@ -518,6 +518,15 @@ var int nextTradeId = 1
 var int activeTradeId = na
 var int activeTradeZoneId = na
 var int activeTradeTouchCount = na
+var bool orderPendingFill = false
+var bool pendingOrderIsLong = false
+var int pendingOrderZoneId = na
+var int pendingOrderTouchCount = na
+var float pendingOrderEntryPrice = na
+var float pendingOrderInitialRisk = na
+var float pendingOrderStopPrice = na
+var float pendingOrderTargetPrice = na
+var int pendingOrderSignalBar = na
 var array<string> consumedLongOpportunities = array.new_string()
 var array<string> consumedShortOpportunities = array.new_string()
 
@@ -589,20 +598,18 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
                         nearestResistance := na(nearestResistance) ? targetZone.lower : math.min(nearestResistance, targetZone.lower)
             if not na(nearestResistance)
                 targetPrice := nearestResistance
-            activeEntryPrice := entryPrice
-            activeInitialRisk := risk
-            activeStopPrice := stopPrice
-            activeTargetPrice := targetPrice
-            activeEntryBar := bar_index
-            activeTradeId := nextTradeId
-            nextTradeId += 1
-            activeTradeZoneId := longSetupZoneId
-            activeTradeTouchCount := longSetupTouchCount
-            consumeSetupOpportunity(consumedLongOpportunities, longSetupZoneId, longSetupTouchCount)
+            orderPendingFill := true
+            pendingOrderIsLong := true
+            pendingOrderZoneId := longSetupZoneId
+            pendingOrderTouchCount := longSetupTouchCount
+            pendingOrderEntryPrice := entryPrice
+            pendingOrderInitialRisk := risk
+            pendingOrderStopPrice := stopPrice
+            pendingOrderTargetPrice := targetPrice
+            pendingOrderSignalBar := bar_index
             if debugStrategy
-                log.info("ENTER_LONG | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ORDER_LONG | Z#{0} | touch={1} | STF={2} | setup_zone={3}-{4} | signal_close={5} | SL={6} | TP={7} | risk={8} | rewardR={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", pendingOrderZoneId, pendingOrderTouchCount, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Long", strategy.long)
-            strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
         shortSetupPending := false
 
@@ -621,20 +628,18 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
                         nearestSupport := na(nearestSupport) ? targetZone.upper : math.max(nearestSupport, targetZone.upper)
             if not na(nearestSupport)
                 targetPrice := nearestSupport
-            activeEntryPrice := entryPrice
-            activeInitialRisk := risk
-            activeStopPrice := stopPrice
-            activeTargetPrice := targetPrice
-            activeEntryBar := bar_index
-            activeTradeId := nextTradeId
-            nextTradeId += 1
-            activeTradeZoneId := shortSetupZoneId
-            activeTradeTouchCount := shortSetupTouchCount
-            consumeSetupOpportunity(consumedShortOpportunities, shortSetupZoneId, shortSetupTouchCount)
+            orderPendingFill := true
+            pendingOrderIsLong := false
+            pendingOrderZoneId := shortSetupZoneId
+            pendingOrderTouchCount := shortSetupTouchCount
+            pendingOrderEntryPrice := entryPrice
+            pendingOrderInitialRisk := risk
+            pendingOrderStopPrice := stopPrice
+            pendingOrderTargetPrice := targetPrice
+            pendingOrderSignalBar := bar_index
             if debugStrategy
-                log.info("ENTER_SHORT | Trade#{0} | Z#{1} | touch={2} | STF={3} | setup_zone={4}-{5} | entry={6} | SL={7} | TP={8} | risk={9} | rewardR={10} | CTF O/H/L/C={11}/{12}/{13}/{14}", activeTradeId, activeTradeZoneId, activeTradeTouchCount, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                log.info("ORDER_SHORT | Z#{0} | touch={1} | STF={2} | setup_zone={3}-{4} | signal_close={5} | SL={6} | TP={7} | risk={8} | rewardR={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", pendingOrderZoneId, pendingOrderTouchCount, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Short", strategy.short)
-            strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
         shortSetupPending := false
 else
@@ -647,7 +652,42 @@ else
     longSetupPending := false
     shortSetupPending := false
 
-// Optional breakeven management. Disabled by default so adding the feature does
+// Confirm actual fills from TradingView's broker-emulator position transition.
+// Trade IDs and consumed opportunities belong to real positions, not order submissions.
+if strategy.position_size != 0 and strategy.position_size[1] == 0 and orderPendingFill
+    bool filledLong = strategy.position_size > 0
+    if filledLong == pendingOrderIsLong
+        activeTradeId := nextTradeId
+        nextTradeId += 1
+        activeTradeZoneId := pendingOrderZoneId
+        activeTradeTouchCount := pendingOrderTouchCount
+        activeEntryPrice := strategy.position_avg_price
+        activeInitialRisk := pendingOrderInitialRisk
+        activeStopPrice := pendingOrderStopPrice
+        activeTargetPrice := pendingOrderTargetPrice
+        activeEntryBar := bar_index
+        if filledLong
+            consumeSetupOpportunity(consumedLongOpportunities, activeTradeZoneId, activeTradeTouchCount)
+        else
+            consumeSetupOpportunity(consumedShortOpportunities, activeTradeZoneId, activeTradeTouchCount)
+        if debugStrategy
+            log.info("ENTER_{0} | Trade#{1} | Z#{2} | touch={3} | fill={4} | SL={5} | TP={6} | risk={7} | signal_bar={8} | fill_bar={9}", filledLong ? "LONG" : "SHORT", activeTradeId, activeTradeZoneId, activeTradeTouchCount, str.tostring(activeEntryPrice, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), str.tostring(activeInitialRisk, format.mintick), pendingOrderSignalBar, bar_index)
+    orderPendingFill := false
+    pendingOrderZoneId := na
+    pendingOrderTouchCount := na
+    pendingOrderEntryPrice := na
+    pendingOrderInitialRisk := na
+    pendingOrderStopPrice := na
+    pendingOrderTargetPrice := na
+    pendingOrderSignalBar := na
+
+// Protect a just-filled position immediately using the snapshotted order levels.
+if strategy.position_size > 0 and not na(activeStopPrice) and not na(activeTargetPrice)
+    strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
+else if strategy.position_size < 0 and not na(activeStopPrice) and not na(activeTargetPrice)
+    strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
+
+// // Optional breakeven management. Disabled by default so adding the feature does
 // not change the current baseline backtest until explicitly enabled.
 if strategy.position_size > 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
     if breakevenEnabled and high >= activeEntryPrice + activeInitialRisk * breakevenTriggerR
