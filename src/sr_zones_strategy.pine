@@ -47,7 +47,7 @@ tradeDirection = input.string("Both", "Trade direction", options = ["Both", "Lon
 tradeNeutralStructure = input.bool(true, "Trade neutral structure", group = groupStrategy)
 breakevenEnabled = input.bool(false, "Breakeven enabled", group = groupStrategy)
 breakevenTriggerR = input.float(1.0, "Breakeven trigger (R)", minval = 0.1, step = 0.1, group = groupStrategy)
-debugStrategy = input.bool(false, "Show strategy debug", group = groupStrategy)
+debugStrategy = input.bool(false, "Enable Pine Logs debug", group = groupStrategy)
 allowLong = tradeDirection != "Short only"
 allowShort = tradeDirection != "Long only"
 
@@ -445,21 +445,25 @@ if validTimeframes and strategy.position_size == 0
                     longSetupUpper := zone.upper
                     longSetupATR := currentATR
                     if debugStrategy
-                        label.new(bar_index, low, "ARM L\nSTF:" + (structureState == 1 ? "BULLISH" : structureState == -1 ? "BEARISH" : "NEUTRAL") + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_up, textcolor = color.white, color = color.new(color.blue, 20), size = size.normal)
+                        log.info("ARM_LONG | STF={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | CTF O/H/L/C={7}/{8}/{9}/{10} | ZTF_ATR={11}", structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
                 if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
                     shortSetupATR := currentATR
                     if debugStrategy
-                        label.new(bar_index, high, "ARM S\nSTF:" + (structureState == 1 ? "BULLISH" : structureState == -1 ? "BEARISH" : "NEUTRAL") + "\nZ:" + str.tostring(zone.lower, format.mintick) + "-" + str.tostring(zone.upper, format.mintick), style = label.style_label_down, textcolor = color.white, color = color.new(color.orange, 20), size = size.normal)
+                        log.info("ARM_SHORT | STF={0} | zone={1}-{2} | T={3} | R={4} | B={5} | strength={6} | CTF O/H/L/C={7}/{8}/{9}/{10} | ZTF_ATR={11}", structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
 
     // A pending setup is cancelled if STF no longer permits its direction.
     bool longStructureAllowed = structureState == 1 or (tradeNeutralStructure and structureState == 0)
     bool shortStructureAllowed = structureState == -1 or (tradeNeutralStructure and structureState == 0)
     if longSetupPending and not longStructureAllowed
+        if debugStrategy
+            log.info("CANCEL_LONG | reason=STF | STF={0} | pending_zone={1}-{2} | CTF_close={3}", structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(close, format.mintick))
         longSetupPending := false
     if shortSetupPending and not shortStructureAllowed
+        if debugStrategy
+            log.info("CANCEL_SHORT | reason=STF | STF={0} | pending_zone={1}-{2} | CTF_close={3}", structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(close, format.mintick))
         shortSetupPending := false
 
     bool longSignal = allowLong and longSetupPending and close > longSetupUpper
@@ -486,7 +490,7 @@ if validTimeframes and strategy.position_size == 0
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
             if debugStrategy
-                label.new(bar_index, low, "ENTER L\nE:" + str.tostring(entryPrice, format.mintick) + "\nSL:" + str.tostring(stopPrice, format.mintick) + "\nTP:" + str.tostring(targetPrice, format.mintick) + "\nR:" + str.tostring(risk, format.mintick), style = label.style_label_up, textcolor = color.white, color = color.new(color.green, 10), size = size.normal)
+                log.info("ENTER_LONG | STF={0} | setup_zone={1}-{2} | entry={3} | SL={4} | TP={5} | risk={6} | rewardR={7} | CTF O/H/L/C={8}/{9}/{10}/{11}", structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Long", strategy.long)
             strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
@@ -513,7 +517,7 @@ if validTimeframes and strategy.position_size == 0
             activeTargetPrice := targetPrice
             activeEntryBar := bar_index
             if debugStrategy
-                label.new(bar_index, high, "ENTER S\nE:" + str.tostring(entryPrice, format.mintick) + "\nSL:" + str.tostring(stopPrice, format.mintick) + "\nTP:" + str.tostring(targetPrice, format.mintick) + "\nR:" + str.tostring(risk, format.mintick), style = label.style_label_down, textcolor = color.white, color = color.new(color.red, 10), size = size.normal)
+                log.info("ENTER_SHORT | STF={0} | setup_zone={1}-{2} | entry={3} | SL={4} | TP={5} | risk={6} | rewardR={7} | CTF O/H/L/C={8}/{9}/{10}/{11}", structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
             strategy.entry("Short", strategy.short)
             strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
         longSetupPending := false
@@ -538,7 +542,7 @@ if strategy.position_size == 0 and strategy.position_size[1] != 0
         bool wasLong = strategy.position_size[1] > 0
         float exitReference = close
         string exitReason = wasLong ? (low <= activeStopPrice ? "SL" : high >= activeTargetPrice ? "TP" : "EXIT") : (high >= activeStopPrice ? "SL" : low <= activeTargetPrice ? "TP" : "EXIT")
-        label.new(bar_index, wasLong ? high : low, exitReason + "\nX:" + str.tostring(exitReference, format.mintick) + "\nBars:" + str.tostring(na(activeEntryBar) ? na : bar_index - activeEntryBar), style = wasLong ? label.style_label_down : label.style_label_up, textcolor = color.white, color = color.new(color.gray, 15), size = size.normal)
+        log.info("CLOSE_{0} | reason={1} | entry={2} | exit_bar_close={3} | SL={4} | TP={5} | bars={6} | CTF O/H/L/C={7}/{8}/{9}/{10}", wasLong ? "LONG" : "SHORT", exitReason, str.tostring(activeEntryPrice, format.mintick), str.tostring(exitReference, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), na(activeEntryBar) ? na : bar_index - activeEntryBar, str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
     activeEntryPrice := na
     activeInitialRisk := na
     activeStopPrice := na
