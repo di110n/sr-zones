@@ -43,6 +43,9 @@ responsiveMinRate = input.float(0.50, "Responsive: minimum reaction rate", minva
 groupStrategy = "Strategy"
 stopBufferATR = input.float(0.20, "Stop buffer (ZTF ATR)", minval = 0.0, step = 0.01, group = groupStrategy)
 minimumRewardR = input.float(2.0, "Minimum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
+tradeDirection = input.string("Both", "Trade direction", options = ["Both", "Long only", "Short only"], group = groupStrategy)
+allowLong = tradeDirection != "Short only"
+allowShort = tradeDirection != "Long only"
 
 groupDisplay = "Display"
 showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
@@ -427,12 +430,12 @@ if validTimeframes and strategy.position_size == 0
             SRZone zone = array.get(zones, i)
             if zone.active
                 bool ctfInteracts = high >= zone.lower and low <= zone.upper
-                if structureState == 1 and zone.isSupport and ctfInteracts and not longSetupPending
+                if allowLong and structureState == 1 and zone.isSupport and ctfInteracts and not longSetupPending
                     longSetupPending := true
                     longSetupLower := zone.lower
                     longSetupUpper := zone.upper
                     longSetupATR := currentATR
-                if structureState == -1 and not zone.isSupport and ctfInteracts and not shortSetupPending
+                if allowShort and structureState == -1 and not zone.isSupport and ctfInteracts and not shortSetupPending
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
@@ -444,8 +447,8 @@ if validTimeframes and strategy.position_size == 0
     if shortSetupPending and structureState != -1
         shortSetupPending := false
 
-    bool longSignal = longSetupPending and close > longSetupUpper
-    bool shortSignal = shortSetupPending and close < shortSetupLower
+    bool longSignal = allowLong and longSetupPending and close > longSetupUpper
+    bool shortSignal = allowShort and shortSetupPending and close < shortSetupLower
 
     if longSignal and not na(longSetupATR)
         float entryPrice = close
