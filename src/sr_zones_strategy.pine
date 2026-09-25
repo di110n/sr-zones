@@ -404,6 +404,10 @@ if processZoneBar
         box.delete(oldest.boxId)
 
 // CTF interaction lifecycle: evaluate every confirmed chart bar.
+// Strategy arming consumes only touch episodes that BEGIN on this bar.
+array<int> newTouchZoneIds = array.new_int()
+array<int> newTouchCounts = array.new_int()
+
 if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
     for i = 0 to array.size(zones) - 1
         SRZone zone = array.get(zones, i)
@@ -454,6 +458,8 @@ if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
                     if not zone.inInteraction
                         zone.inInteraction := true
                         zone.touchCount += 1
+                        array.push(newTouchZoneIds, zone.id)
+                        array.push(newTouchCounts, zone.touchCount)
                         zone.reactionPending := not na(currentATR)
                         zone.reactionATRAtTouch := currentATR
                         if debugStrategy
@@ -553,11 +559,12 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
         for i = 0 to array.size(zones) - 1
             SRZone zone = array.get(zones, i)
             if zone.active
-                bool ctfInteracts = high >= zone.lower and low <= zone.upper
-                // A break and role flip can happen earlier on this same CTF bar.
-                // Do not treat that break bar as the first touch of the new role:
-                // wait until price leaves and a later CTF bar starts a fresh touch episode.
-                bool freshTouchAvailable = ctfInteracts and zone.inInteraction and not zone.awaitingFreshTouch
+                bool freshTouchAvailable = false
+                if array.size(newTouchZoneIds) > 0
+                    for touchIndex = 0 to array.size(newTouchZoneIds) - 1
+                        if array.get(newTouchZoneIds, touchIndex) == zone.id and array.get(newTouchCounts, touchIndex) == zone.touchCount
+                            freshTouchAvailable := true
+                            break
                 if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and freshTouchAvailable and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
                     longSetupPending := true
                     longSetupLower := zone.lower
