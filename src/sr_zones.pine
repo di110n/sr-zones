@@ -313,14 +313,14 @@ createSupportZone(float pivotPrice, int zoneId) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCloseTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, time_close, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice, int zoneId) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCloseTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, time_close, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 // -----------------------------------------------------------------------------
