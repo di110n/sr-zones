@@ -541,7 +541,11 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             SRZone zone = array.get(zones, i)
             if zone.active
                 bool ctfInteracts = high >= zone.lower and low <= zone.upper
-                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and ctfInteracts and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
+                // A break and role flip can happen earlier on this same CTF bar.
+                // Do not treat that break bar as the first touch of the new role:
+                // wait until price leaves and a later CTF bar starts a fresh touch episode.
+                bool freshTouchAvailable = ctfInteracts and zone.inInteraction
+                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and freshTouchAvailable and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
                     longSetupPending := true
                     longSetupLower := zone.lower
                     longSetupUpper := zone.upper
@@ -550,7 +554,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
                     longSetupTouchCount := zone.touchCount
                     if debugStrategy
                         log.info("ARM_LONG | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
-                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and ctfInteracts and not shortSetupPending and not setupOpportunityConsumed(consumedShortOpportunities, zone.id, zone.touchCount)
+                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and freshTouchAvailable and not shortSetupPending and not setupOpportunityConsumed(consumedShortOpportunities, zone.id, zone.touchCount)
                     shortSetupPending := true
                     shortSetupLower := zone.lower
                     shortSetupUpper := zone.upper
