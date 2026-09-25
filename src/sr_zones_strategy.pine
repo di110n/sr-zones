@@ -173,6 +173,7 @@ type SRZone
     int lastInteractionBar
     int touchCount
     bool inInteraction
+    bool awaitingFreshTouch
     int reactionCount
     bool reactionPending
     float reactionATRAtTouch
@@ -225,6 +226,7 @@ updateZoneVisuals(SRZone zone) =>
 freezeZone(SRZone zone, int ageBars, float distanceATR, int freezeTime) =>
     zone.active := false
     zone.inInteraction := false
+    zone.awaitingFreshTouch := false
     zone.reactionPending := false
     zone.reactionATRAtTouch := na
     zone.frozenAgeBars := ageBars
@@ -252,6 +254,7 @@ mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
             target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
             target.touchCount := math.max(target.touchCount, incoming.touchCount)
             target.inInteraction := target.inInteraction or incoming.inInteraction
+            target.awaitingFreshTouch := target.awaitingFreshTouch or incoming.awaitingFreshTouch
             target.reactionCount := math.max(target.reactionCount, incoming.reactionCount)
             bool targetPending = target.reactionPending
             bool incomingPending = incoming.reactionPending
@@ -310,6 +313,7 @@ mergeActiveZones() =>
                                     a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
                                     a.touchCount := math.max(a.touchCount, b.touchCount)
                                     a.inInteraction := a.inInteraction or b.inInteraction
+                                    a.awaitingFreshTouch := a.awaitingFreshTouch or b.awaitingFreshTouch
                                     a.reactionCount := math.max(a.reactionCount, b.reactionCount)
                                     bool aPending = a.reactionPending
                                     bool bPending = b.reactionPending
@@ -337,7 +341,7 @@ createSupportZone(float pivotPrice, int zoneId) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     if debugStrategy
         log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
     addOrMergeZone(zone)
@@ -346,7 +350,7 @@ createResistanceZone(float pivotPrice, int zoneId) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     if debugStrategy
         log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
     addOrMergeZone(zone)
@@ -410,6 +414,7 @@ if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
 
             if broken
                 zone.inInteraction := false
+                zone.awaitingFreshTouch := true
                 zone.reactionPending := false
                 zone.reactionATRAtTouch := na
                 zone.breakCount += 1
@@ -436,7 +441,15 @@ if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
             else
                 bool interacting = high >= zone.lower and low <= zone.upper
 
-                if interacting
+                if zone.awaitingFreshTouch
+                    // After a break/role flip, the breaking interaction cannot
+                    // immediately become a setup in the new role. Require one
+                    // fully outside CTF bar before a later re-entry can start
+                    // the next touch episode.
+                    if not interacting
+                        zone.awaitingFreshTouch := false
+                        zone.inInteraction := false
+                else if interacting
                     zone.lastInteractionBar := zoneBarCounter
                     if not zone.inInteraction
                         zone.inInteraction := true
@@ -544,7 +557,7 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
                 // A break and role flip can happen earlier on this same CTF bar.
                 // Do not treat that break bar as the first touch of the new role:
                 // wait until price leaves and a later CTF bar starts a fresh touch episode.
-                bool freshTouchAvailable = ctfInteracts and zone.inInteraction
+                bool freshTouchAvailable = ctfInteracts and zone.inInteraction and not zone.awaitingFreshTouch
                 if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and freshTouchAvailable and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
                     longSetupPending := true
                     longSetupLower := zone.lower
