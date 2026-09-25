@@ -354,10 +354,13 @@ createResistanceZone(float pivotPrice, int zoneId) =>
 // -----------------------------------------------------------------------------
 // Zone engine
 //
-// Every state transition below runs ONCE per completed ZTF bar. This is the
-// critical rule that keeps pivots, ATR, volume, touches, reactions, breaks and
-// bar-based staleness in ZTF semantics even when displayed on a lower CTF.
+// ZTF owns zone birth, same-role merging, ATR scale, and staleness aging.
+// CTF owns price interactions: touch episodes, reactions, breaks, role flips,
+// and max-break freezes. This keeps trade interaction state on the execution
+// timeframe while preserving the zone's higher-timeframe construction/aging.
 // -----------------------------------------------------------------------------
+
+// ZTF construction and aging: once per completed ZTF bar.
 if processZoneBar
     zoneBarCounter += 1
 
@@ -369,102 +372,102 @@ if processZoneBar
             createResistanceZone(pivotHigh, nextZoneId)
             nextZoneId += 1
 
-    bool roleChanged = false
+    // Merging belongs to ZTF only, including zones whose roles flipped on CTF.
+    mergeActiveZones()
 
+    // Staleness remains ZTF-based. CTF interactions stamp the current ZTF
+    // counter into lastInteractionBar, but aging advances only here.
     if array.size(zones) > 0
         for i = 0 to array.size(zones) - 1
             SRZone zone = array.get(zones, i)
-
             if zone.active
-                float breakTolerance = currentATR * breakToleranceATR
-                bool broken = not na(currentATR) and (zone.isSupport ? zoneClose < zone.lower - breakTolerance : zoneClose > zone.upper + breakTolerance)
-
-                if broken
-                    // A confirmed break cancels any unconfirmed reaction from
-                    // the current touch. Breaks remain independent evidence.
-                    zone.inInteraction := false
-                    zone.reactionPending := false
-                    zone.reactionATRAtTouch := na
-                    zone.breakCount += 1
-                    zone.lastInteractionBar := zoneBarCounter
-
+                float distanceFromZone = zoneClose > zone.upper ? zoneClose - zone.upper : zoneClose < zone.lower ? zone.lower - zoneClose : 0.0
+                int ageBars = zoneBarCounter - zone.lastInteractionBar
+                float distanceATR = not na(currentATR) and currentATR > 0 ? distanceFromZone / currentATR : na
+                bool oldEnough = ageBars > staleBars
+                bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
+                if oldEnough and farEnough
                     if debugStrategy
-                        log.info("ZONE_BREAK | Z#{0} | old_role={1} | zone={2}-{3} | T={4} | R={5} | B={6}/{7} | ZTF_close={8} | tolerance={9}",
+                        log.info("ZONE_FREEZE | Z#{0} | reason=STALE | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | age={7} | distanceATR={8}",
                             zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
-                            zone.touchCount, zone.reactionCount, zone.breakCount, maxBreaks, str.tostring(zoneClose, format.mintick), str.tostring(breakTolerance, format.mintick))
-                    if zone.breakCount >= maxBreaks
-                        if debugStrategy
-                            log.info("ZONE_FREEZE | Z#{0} | reason=MAX_BREAKS | role={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
-                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
-                                zone.touchCount, zone.reactionCount, zone.breakCount)
-                        zone := freezeZone(zone, na, na, zoneBarCloseTime)
-                    else
-                        bool oldRoleSupport = zone.isSupport
-                        zone.isSupport := not zone.isSupport
-                        if debugStrategy
-                            log.info("ZONE_ROLE_FLIP | Z#{0} | from={1} | to={2} | zone={3}-{4} | T={5} | R={6} | B={7}",
-                                zone.id, oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
-                                str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount)
-                        updateZoneVisuals(zone)
-                        roleChanged := true
-                else
-                    bool interacting = zoneHigh >= zone.lower and zoneLow <= zone.upper
-
-                    if interacting
-                        zone.lastInteractionBar := zoneBarCounter
-                        if not zone.inInteraction
-                            // A new touch episode replaces any still-unconfirmed
-                            // reaction from the previous episode.
-                            zone.inInteraction := true
-                            zone.touchCount += 1
-                            zone.reactionPending := not na(currentATR)
-                            zone.reactionATRAtTouch := currentATR
-                            if debugStrategy
-                                log.info("ZONE_TOUCH | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | ZTF O/H/L/C={8}/{9}/{10}/{11} | ATR={12}",
-                                    zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
-                                    zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone),
-                                    "n/a", str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick), str.tostring(currentATR, format.mintick))
-                            updateZoneInfo(zone)
-                    else
-                        // One fully outside completed ZTF bar ends the episode.
-                        zone.inInteraction := false
-
-                        if zone.reactionPending and not na(zone.reactionATRAtTouch)
-                            float requiredMove = zone.reactionATRAtTouch * reactionATR
-                            bool reacted = zone.isSupport ? zoneHigh >= zone.upper + requiredMove : zoneLow <= zone.lower - requiredMove
-                            if reacted
-                                zone.reactionCount += 1
-                                if debugStrategy
-                                    log.info("ZONE_REACTION | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | requiredMove={7} | ZTF H/L/C={8}/{9}/{10}",
-                                        zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
-                                        zone.touchCount, zone.reactionCount, zone.breakCount, str.tostring(requiredMove, format.mintick),
-                                        str.tostring(zoneHigh, format.mintick), str.tostring(zoneLow, format.mintick), str.tostring(zoneClose, format.mintick))
-                                zone.reactionPending := false
-                                zone.reactionATRAtTouch := na
-                                updateZoneInfo(zone)
-
-                if zone.active
-                    float distanceFromZone = zoneClose > zone.upper ? zoneClose - zone.upper : zoneClose < zone.lower ? zone.lower - zoneClose : 0.0
-                    int ageBars = zoneBarCounter - zone.lastInteractionBar
-                    float distanceATR = not na(currentATR) and currentATR > 0 ? distanceFromZone / currentATR : na
-                    bool oldEnough = ageBars > staleBars
-                    bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
-                    if oldEnough and farEnough
-                        if debugStrategy
-                            log.info("ZONE_FREEZE | Z#{0} | reason=STALE | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | age={7} | distanceATR={8}",
-                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
-                                zone.touchCount, zone.reactionCount, zone.breakCount, ageBars, str.tostring(distanceATR, "#.##"))
-                        zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
-
-                array.set(zones, i, zone)
-
-    if roleChanged
-        mergeActiveZones()
+                            zone.touchCount, zone.reactionCount, zone.breakCount, ageBars, str.tostring(distanceATR, "#.##"))
+                    zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
+                    array.set(zones, i, zone)
 
     int maxStoredZones = 450
     if array.size(zones) > maxStoredZones
         SRZone oldest = array.shift(zones)
         box.delete(oldest.boxId)
+
+// CTF interaction lifecycle: evaluate every confirmed chart bar.
+if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
+    for i = 0 to array.size(zones) - 1
+        SRZone zone = array.get(zones, i)
+
+        if zone.active
+            float breakTolerance = currentATR * breakToleranceATR
+            bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
+
+            if broken
+                zone.inInteraction := false
+                zone.reactionPending := false
+                zone.reactionATRAtTouch := na
+                zone.breakCount += 1
+                zone.lastInteractionBar := zoneBarCounter
+
+                if debugStrategy
+                    log.info("ZONE_BREAK | Z#{0} | old_role={1} | zone={2}-{3} | T={4} | R={5} | B={6}/{7} | CTF_close={8} | tolerance={9}",
+                        zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                        zone.touchCount, zone.reactionCount, zone.breakCount, maxBreaks, str.tostring(close, format.mintick), str.tostring(breakTolerance, format.mintick))
+                if zone.breakCount >= maxBreaks
+                    if debugStrategy
+                        log.info("ZONE_FREEZE | Z#{0} | reason=MAX_BREAKS | role={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
+                            zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            zone.touchCount, zone.reactionCount, zone.breakCount)
+                    zone := freezeZone(zone, na, na, time_close)
+                else
+                    bool oldRoleSupport = zone.isSupport
+                    zone.isSupport := not zone.isSupport
+                    if debugStrategy
+                        log.info("ZONE_ROLE_FLIP | Z#{0} | from={1} | to={2} | zone={3}-{4} | T={5} | R={6} | B={7}",
+                            zone.id, oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
+                            str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount)
+                    updateZoneVisuals(zone)
+            else
+                bool interacting = high >= zone.lower and low <= zone.upper
+
+                if interacting
+                    zone.lastInteractionBar := zoneBarCounter
+                    if not zone.inInteraction
+                        zone.inInteraction := true
+                        zone.touchCount += 1
+                        zone.reactionPending := not na(currentATR)
+                        zone.reactionATRAtTouch := currentATR
+                        if debugStrategy
+                            log.info("ZONE_TOUCH | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}",
+                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone),
+                                str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+                        updateZoneInfo(zone)
+                else
+                    // One fully outside completed CTF bar ends the touch episode.
+                    zone.inInteraction := false
+
+                    if zone.reactionPending and not na(zone.reactionATRAtTouch)
+                        float requiredMove = zone.reactionATRAtTouch * reactionATR
+                        bool reacted = zone.isSupport ? high >= zone.upper + requiredMove : low <= zone.lower - requiredMove
+                        if reacted
+                            zone.reactionCount += 1
+                            if debugStrategy
+                                log.info("ZONE_REACTION | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | requiredMove={7} | CTF H/L/C={8}/{9}/{10}",
+                                    zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                    zone.touchCount, zone.reactionCount, zone.breakCount, str.tostring(requiredMove, format.mintick),
+                                    str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                            zone.reactionPending := false
+                            zone.reactionATRAtTouch := na
+                            updateZoneInfo(zone)
+
+            array.set(zones, i, zone)
 
 // -----------------------------------------------------------------------------
 // Strategy setup lifecycle helpers
