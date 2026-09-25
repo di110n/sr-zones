@@ -147,6 +147,7 @@ type SRZone
     bool isSupport
     bool active
     int createdTime
+    int eligibleFromTime
     int lastInteractionBar
     int touchCount
     bool inInteraction
@@ -228,6 +229,7 @@ mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
             target.lower := math.min(target.lower, incoming.lower)
             target.upper := math.max(target.upper, incoming.upper)
             target.createdTime := math.min(target.createdTime, incoming.createdTime)
+            target.eligibleFromTime := math.min(target.eligibleFromTime, incoming.eligibleFromTime)
             target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
             target.touchCount := math.max(target.touchCount, incoming.touchCount)
             target.inInteraction := target.inInteraction or incoming.inInteraction
@@ -283,6 +285,7 @@ mergeActiveZones() =>
                                     a.lower := math.min(a.lower, b.lower)
                                     a.upper := math.max(a.upper, b.upper)
                                     a.createdTime := math.min(a.createdTime, b.createdTime)
+                                    a.eligibleFromTime := math.min(a.eligibleFromTime, b.eligibleFromTime)
                                     a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
                                     a.touchCount := math.max(a.touchCount, b.touchCount)
                                     a.inInteraction := a.inInteraction or b.inInteraction
@@ -310,14 +313,14 @@ createSupportZone(float pivotPrice, int zoneId) =>
     float lower = pivotPrice
     float upper = pivotPrice + pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCloseTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 createResistanceZone(float pivotPrice, int zoneId) =>
     float upper = pivotPrice
     float lower = pivotPrice - pivotATR * zoneMultiplier
     box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
-    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCloseTime, zoneBarCounter, 0, false, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
     addOrMergeZone(zone)
 
 // -----------------------------------------------------------------------------
@@ -370,7 +373,7 @@ if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
     for i = 0 to array.size(zones) - 1
         SRZone zone = array.get(zones, i)
 
-        if zone.active
+        if zone.active and time >= zone.eligibleFromTime
             float breakTolerance = currentATR * breakToleranceATR
             bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
 
