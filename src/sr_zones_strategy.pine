@@ -44,6 +44,7 @@ groupStrategy = "Strategy"
 stopBufferATR = input.float(0.20, "Stop buffer (ZTF ATR)", minval = 0.0, step = 0.01, group = groupStrategy)
 minimumRewardR = input.float(2.0, "Minimum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
 tradeDirection = input.string("Both", "Trade direction", options = ["Both", "Long only", "Short only"], group = groupStrategy)
+entryMode = input.string("Confirmed exit from zone", "Entry mode", options = ["Confirmed exit from zone", "Immediate zone interaction"], group = groupStrategy)
 tradeNeutralStructure = input.bool(true, "Trade neutral structure", group = groupStrategy)
 breakevenEnabled = input.bool(false, "Breakeven enabled", group = groupStrategy)
 breakevenTriggerR = input.float(1.0, "Breakeven trigger (R)", minval = 0.1, step = 0.1, group = groupStrategy)
@@ -155,8 +156,8 @@ var bool debugRunHeaderLogged = false
 if debugStrategy and not debugRunHeaderLogged and validTimeframes
     log.info("RUN_CONFIG | symbol={0} | CTF={1} | ZTF={2} | STF={3} | zonePivot={4}/{5} | structurePivot={6}/{7} | volumeLen={8} | volumeMult={9} | ATRLen={10} | zoneATRMult={11} | maxBreaks={12} | breakTolATR={13} | staleBars={14} | staleDistanceATR={15} | mergeGapATR={16} | reactionATR={17} | responsiveMinTouches={18} | responsiveMinRate={19}",
         syminfo.tickerid, timeframe.period, zoneTf, structureTf, leftBars, rightBars, structureLeftBars, structureRightBars, volumeLength, str.tostring(volumeMultiplier), atrLength, str.tostring(zoneMultiplier), maxBreaks, str.tostring(breakToleranceATR), staleBars, str.tostring(staleDistanceATR), str.tostring(mergeGapATR), str.tostring(reactionATR), responsiveMinTouches, str.tostring(responsiveMinRate))
-    log.info("RUN_STRATEGY | stopBufferATR={0} | minimumRewardR={1} | direction={2} | tradeNeutral={3} | breakeven={4} | breakevenTriggerR={5} | initialCapital={6} | commission/model=see Strategy Properties",
-        str.tostring(stopBufferATR), str.tostring(minimumRewardR), tradeDirection, tradeNeutralStructure, breakevenEnabled, str.tostring(breakevenTriggerR), str.tostring(strategy.initial_capital))
+    log.info("RUN_STRATEGY | stopBufferATR={0} | minimumRewardR={1} | direction={2} | entryMode={3} | tradeNeutral={4} | breakeven={5} | breakevenTriggerR={6} | initialCapital={7} | commission/model=see Strategy Properties",
+        str.tostring(stopBufferATR), str.tostring(minimumRewardR), tradeDirection, entryMode, tradeNeutralStructure, breakevenEnabled, str.tostring(breakevenTriggerR), str.tostring(strategy.initial_capital))
     debugRunHeaderLogged := true
 
 // -----------------------------------------------------------------------------
@@ -580,8 +581,9 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             log.info("CANCEL_SHORT | Z#{0} | reason=STF | STF={1} | pending_zone={2}-{3} | CTF_close={4}", shortSetupZoneId, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(close, format.mintick))
         shortSetupPending := false
 
-    bool longSignal = allowLong and longSetupPending and close > longSetupUpper
-    bool shortSignal = allowShort and shortSetupPending and close < shortSetupLower
+    bool immediateEntry = entryMode == "Immediate zone interaction"
+    bool longSignal = allowLong and longSetupPending and (immediateEntry or close > longSetupUpper)
+    bool shortSignal = allowShort and shortSetupPending and (immediateEntry or close < shortSetupLower)
 
     if longSignal and not na(longSetupATR)
         float entryPrice = close
