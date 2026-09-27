@@ -1,0 +1,781 @@
+//@version=6
+strategy("Dynamic S/R Zones Strategy", overlay = true, max_boxes_count = 500, pyramiding = 0, process_orders_on_close = true)
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+groupTimeframes = "Timeframes"
+zoneTfInput      = input.timeframe("", "Zone timeframe", group = groupTimeframes)
+structureTfInput = input.timeframe("240", "Structure timeframe", group = groupTimeframes)
+
+groupPivots = "Pivot Detection"
+leftBars  = input.int(10, "Left bars", minval = 1, group = groupPivots)
+rightBars = input.int(5, "Right / confirmation bars", minval = 1, group = groupPivots)
+
+groupStructure = "Market Structure"
+structureLeftBars  = input.int(5, "Structure left bars", minval = 1, group = groupStructure)
+structureRightBars = input.int(2, "Structure right / confirmation bars", minval = 1, group = groupStructure)
+
+groupVolume = "Volume Birth Gate"
+volumeLength     = input.int(20, "Volume SMA length", minval = 1, group = groupVolume)
+volumeMultiplier = input.float(1.5, "Volume multiplier", minval = 0.1, step = 0.1, group = groupVolume)
+
+groupZones = "Initial Zone Geometry"
+atrLength      = input.int(200, "ATR length", minval = 1, group = groupZones)
+zoneMultiplier = input.float(0.4, "ATR zone multiplier", minval = 0.01, step = 0.01, group = groupZones)
+
+groupLifecycle = "Zone Lifecycle"
+maxBreaks         = input.int(3, "Freeze after breaks", minval = 1, group = groupLifecycle)
+breakToleranceATR = input.float(0.20, "Break tolerance (ATR)", minval = 0.0, step = 0.01, group = groupLifecycle)
+staleBars         = input.int(100, "Stale after bars without interaction", minval = 1, group = groupLifecycle)
+staleDistanceATR  = input.float(5.0, "Minimum distance for staleness (ATR)", minval = 0.1, step = 0.1, group = groupLifecycle)
+
+groupMerge = "Zone Merging"
+mergeGapATR = input.float(0.20, "Merge gap (ATR)", minval = 0.0, step = 0.01, group = groupMerge)
+
+groupReaction = "Reaction Detection"
+reactionATR = input.float(0.50, "Reaction distance (ATR)", minval = 0.01, step = 0.05, group = groupReaction)
+
+groupStrength = "Zone Strength"
+responsiveMinTouches = input.int(2, "Responsive: minimum touches", minval = 1, group = groupStrength)
+responsiveMinRate = input.float(0.50, "Responsive: minimum reaction rate", minval = 0.0, maxval = 1.0, step = 0.05, group = groupStrength)
+
+groupStrategy = "Strategy"
+stopBufferATR = input.float(0.20, "Stop buffer (ZTF ATR)", minval = 0.0, step = 0.01, group = groupStrategy)
+minimumRewardR = input.float(2.0, "Minimum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
+maximumRewardEnabled = input.bool(false, "Maximum reward cap enabled", group = groupStrategy)
+maximumRewardR = input.float(5.0, "Maximum reward (R)", minval = 0.1, step = 0.1, group = groupStrategy)
+tradeDirection = input.string("Both", "Trade direction", options = ["Both", "Long only", "Short only"], group = groupStrategy)
+entryMode = input.string("Confirmed exit from zone", "Entry mode", options = ["Confirmed exit from zone", "Immediate zone interaction"], group = groupStrategy)
+tradeNeutralStructure = input.bool(true, "Trade neutral structure", group = groupStrategy)
+breakevenEnabled = input.bool(false, "Breakeven enabled", group = groupStrategy)
+breakevenTriggerR = input.float(1.0, "Breakeven trigger (R)", minval = 0.1, step = 0.1, group = groupStrategy)
+debugStrategy = input.bool(false, "Enable Pine Logs debug", group = groupStrategy)
+allowLong = tradeDirection != "Short only"
+allowShort = tradeDirection != "Long only"
+
+groupDisplay = "Display"
+showZoneInfo = input.bool(true, "Show zone info", group = groupDisplay)
+showContextPanel = input.bool(true, "Show timeframe / structure panel", group = groupDisplay)
+showStructurePivots = input.bool(false, "Show STF structure pivots", group = groupDisplay)
+
+// -----------------------------------------------------------------------------
+// Timeframe architecture and validation
+// -----------------------------------------------------------------------------
+string zoneTf = zoneTfInput == "" ? timeframe.period : zoneTfInput
+string structureTf = structureTfInput == "" ? timeframe.period : structureTfInput
+
+float chartTfSeconds = timeframe.in_seconds()
+float zoneTfSeconds = timeframe.in_seconds(zoneTf)
+float structureTfSeconds = timeframe.in_seconds(structureTf)
+
+bool comparableTimeframes = not na(chartTfSeconds) and not na(zoneTfSeconds) and not na(structureTfSeconds)
+bool validTimeframes = comparableTimeframes and zoneTfSeconds >= chartTfSeconds and structureTfSeconds > zoneTfSeconds
+
+// -----------------------------------------------------------------------------
+// Visuals
+// -----------------------------------------------------------------------------
+supportBg     = color.new(color.teal, 85)
+supportBorder = color.new(color.teal, 45)
+resistBg      = color.new(color.red, 85)
+resistBorder  = color.new(color.red, 45)
+staleBg       = color.new(color.gray, 90)
+staleBorder   = color.new(color.gray, 65)
+zoneTextColor = color.black
+
+// -----------------------------------------------------------------------------
+// Confirmed higher-timeframe data
+//
+// We deliberately request the PREVIOUS completed ZTF/STF bar with lookahead_on.
+// That makes the data available from the first chart bar of the next requested
+// timeframe period without leaking information from an unfinished HTF candle.
+// -----------------------------------------------------------------------------
+[zoneBarTime, zoneBarCloseTime, zoneHigh, zoneLow, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] = request.security(
+        syminfo.tickerid,
+        zoneTf,
+        [
+            time[1],
+            time_close[1],
+            high[1],
+            low[1],
+            close[1],
+            ta.atr(atrLength)[1],
+            ta.pivothigh(high, leftBars, rightBars)[1],
+            ta.pivotlow(low, leftBars, rightBars)[1],
+            time[rightBars + 1],
+            volume[rightBars + 1],
+            ta.sma(volume[1], volumeLength)[rightBars + 1],
+            ta.atr(atrLength)[rightBars + 1]
+        ],
+        lookahead = barmerge.lookahead_on
+    )
+
+bool newZonePeriod = timeframe.change(zoneTf)
+bool processZoneBar = validTimeframes and newZonePeriod and not na(zoneBarTime)
+
+volumeQualified = not na(pivotVolume) and not na(priorVolumeMA) and pivotVolume > priorVolumeMA * volumeMultiplier
+atrReady         = not na(pivotATR)
+birthVolumeRatio = not na(priorVolumeMA) and priorVolumeMA > 0 ? pivotVolume / priorVolumeMA : na
+currentATR       = zoneATR
+
+marketStructureState() =>
+    float swingHigh = ta.pivothigh(high, structureLeftBars, structureRightBars)
+    float swingLow = ta.pivotlow(low, structureLeftBars, structureRightBars)
+    float latestHigh = ta.valuewhen(not na(swingHigh), swingHigh, 0)
+    float previousHigh = ta.valuewhen(not na(swingHigh), swingHigh, 1)
+    float latestLow = ta.valuewhen(not na(swingLow), swingLow, 0)
+    float previousLow = ta.valuewhen(not na(swingLow), swingLow, 1)
+
+    bool ready = not na(latestHigh) and not na(previousHigh) and not na(latestLow) and not na(previousLow)
+    bool bullish = ready and latestHigh > previousHigh and latestLow > previousLow
+    bool bearish = ready and latestHigh < previousHigh and latestLow < previousLow
+
+    bullish ? 1 : bearish ? -1 : 0
+
+int structureState = validTimeframes ? request.security(syminfo.tickerid, structureTf, marketStructureState()[1], lookahead = barmerge.lookahead_on) : 0
+
+[structurePivotHigh, structurePivotLow, structurePivotTime] = request.security(syminfo.tickerid, structureTf, [ta.pivothigh(high, structureLeftBars, structureRightBars)[1], ta.pivotlow(low, structureLeftBars, structureRightBars)[1], time[structureRightBars + 1]], lookahead = barmerge.lookahead_on)
+
+bool newStructurePeriod = timeframe.change(structureTf)
+bool confirmedStructureHigh = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotHigh)
+bool confirmedStructureLow = validTimeframes and showStructurePivots and newStructurePeriod and not na(structurePivotLow)
+
+var label structureHighLabel = na
+var label structureLowLabel = na
+
+if confirmedStructureHigh
+    structureHighLabel := label.new(structurePivotTime, structurePivotHigh, "SH", xloc = xloc.bar_time, style = label.style_triangledown, color = color.red, textcolor = color.red, size = size.small)
+if confirmedStructureLow
+    structureLowLabel := label.new(structurePivotTime, structurePivotLow, "SL", xloc = xloc.bar_time, style = label.style_triangleup, color = color.teal, textcolor = color.teal, size = size.small)
+
+structureStateText(int state) =>
+    state == 1 ? "BULLISH" : state == -1 ? "BEARISH" : "NEUTRAL"
+
+// -----------------------------------------------------------------------------
+// Debug run metadata
+// -----------------------------------------------------------------------------
+var bool debugRunHeaderLogged = false
+if debugStrategy and not debugRunHeaderLogged and validTimeframes
+    log.info("RUN_CONFIG | symbol={0} | CTF={1} | ZTF={2} | STF={3} | zonePivot={4}/{5} | structurePivot={6}/{7} | volumeLen={8} | volumeMult={9} | ATRLen={10} | zoneATRMult={11} | maxBreaks={12} | breakTolATR={13} | staleBars={14} | staleDistanceATR={15} | mergeGapATR={16} | reactionATR={17} | responsiveMinTouches={18} | responsiveMinRate={19}",
+        syminfo.tickerid, timeframe.period, zoneTf, structureTf, leftBars, rightBars, structureLeftBars, structureRightBars, volumeLength, str.tostring(volumeMultiplier), atrLength, str.tostring(zoneMultiplier), maxBreaks, str.tostring(breakToleranceATR), staleBars, str.tostring(staleDistanceATR), str.tostring(mergeGapATR), str.tostring(reactionATR), responsiveMinTouches, str.tostring(responsiveMinRate))
+    log.info("RUN_STRATEGY | stopBufferATR={0} | minimumRewardR={1} | maximumRewardEnabled={2} | maximumRewardR={3} | direction={4} | entryMode={5} | tradeNeutral={6} | breakeven={7} | breakevenTriggerR={8} | initialCapital={9} | commission/model=see Strategy Properties",
+        str.tostring(stopBufferATR), str.tostring(minimumRewardR), maximumRewardEnabled, str.tostring(maximumRewardR), tradeDirection, entryMode, tradeNeutralStructure, breakevenEnabled, str.tostring(breakevenTriggerR), str.tostring(strategy.initial_capital))
+    debugRunHeaderLogged := true
+
+// -----------------------------------------------------------------------------
+// Zone model
+// -----------------------------------------------------------------------------
+type SRZone
+    int id
+    float lower
+    float upper
+    bool isSupport
+    bool active
+    int createdTime
+    int lastInteractionBar
+    int touchCount
+    bool inInteraction
+    bool awaitingFreshTouch
+    int reactionCount
+    bool reactionPending
+    float reactionATRAtTouch
+    int breakCount
+    float birthVolumeRatio
+    int frozenAgeBars
+    float frozenDistanceATR
+    box boxId
+
+var zones = array.new<SRZone>()
+var int zoneBarCounter = 0
+var int nextZoneId = 1
+
+// -----------------------------------------------------------------------------
+// Zone helpers
+// -----------------------------------------------------------------------------
+zoneStrengthState(SRZone zone) =>
+    float reactionRate = zone.touchCount > 0 ? float(zone.reactionCount) / zone.touchCount : na
+    zone.touchCount == 0 ? "UNTESTED" : zone.touchCount >= responsiveMinTouches and reactionRate >= responsiveMinRate ? "RESPONSIVE" : "TESTED"
+
+zoneInfo(SRZone zone) =>
+    if not showZoneInfo
+        ""
+    else
+        string state = zone.active ? (zone.isSupport ? "Su" : "Re") : "FROZEN"
+        string strength = zoneStrengthState(zone)
+        string volumeText = na(zone.birthVolumeRatio) ? "n/a" : str.tostring(zone.birthVolumeRatio, "#.##") + "x"
+        string baseText = "Z#" + str.tostring(zone.id) + " | " + state + " | " + strength + " | T:" + str.tostring(zone.touchCount) + " | R:" + str.tostring(zone.reactionCount) + " | B:" + str.tostring(zone.breakCount) + " | V:" + volumeText + " | ATR:" + str.tostring(zoneMultiplier, "#.##")
+        string staleText = not zone.active and not na(zone.frozenAgeBars) and not na(zone.frozenDistanceATR) ? " | Age:" + str.tostring(zone.frozenAgeBars) + " | sATR:" + str.tostring(zone.frozenDistanceATR, "#.##") : ""
+        baseText + staleText
+
+updateZoneInfo(SRZone zone) =>
+    box.set_text(zone.boxId, zoneInfo(zone))
+    box.set_text_color(zone.boxId, zoneTextColor)
+    box.set_text_size(zone.boxId, size.normal)
+    box.set_text_halign(zone.boxId, zone.active ? text.align_left : text.align_right)
+    box.set_text_valign(zone.boxId, text.align_top)
+
+updateZoneVisuals(SRZone zone) =>
+    box.set_top(zone.boxId, zone.upper)
+    box.set_bottom(zone.boxId, zone.lower)
+    if zone.isSupport
+        box.set_bgcolor(zone.boxId, supportBg)
+        box.set_border_color(zone.boxId, supportBorder)
+    else
+        box.set_bgcolor(zone.boxId, resistBg)
+        box.set_border_color(zone.boxId, resistBorder)
+    updateZoneInfo(zone)
+
+freezeZone(SRZone zone, int ageBars, float distanceATR, int freezeTime) =>
+    zone.active := false
+    zone.inInteraction := false
+    zone.awaitingFreshTouch := false
+    zone.reactionPending := false
+    zone.reactionATRAtTouch := na
+    zone.frozenAgeBars := ageBars
+    zone.frozenDistanceATR := distanceATR
+    box.set_extend(zone.boxId, extend.none)
+    box.set_right(zone.boxId, freezeTime)
+    box.set_bgcolor(zone.boxId, staleBg)
+    box.set_border_color(zone.boxId, staleBorder)
+    updateZoneInfo(zone)
+    zone
+
+zonesCloseEnough(SRZone a, SRZone b, float gapTolerance) =>
+    bool overlaps = a.lower <= b.upper and b.lower <= a.upper
+    float gap = a.upper < b.lower ? b.lower - a.upper : b.upper < a.lower ? a.lower - b.upper : 0.0
+    overlaps or gap <= gapTolerance
+
+mergeZoneAt(int targetIndex, SRZone incoming, float gapTolerance) =>
+    bool merged = false
+    if targetIndex >= 0 and targetIndex < array.size(zones)
+        SRZone target = array.get(zones, targetIndex)
+        if target.active and incoming.active and target.isSupport == incoming.isSupport and zonesCloseEnough(target, incoming, gapTolerance)
+            target.lower := math.min(target.lower, incoming.lower)
+            target.upper := math.max(target.upper, incoming.upper)
+            target.createdTime := math.min(target.createdTime, incoming.createdTime)
+            target.lastInteractionBar := math.max(target.lastInteractionBar, incoming.lastInteractionBar)
+            target.touchCount := math.max(target.touchCount, incoming.touchCount)
+            target.inInteraction := target.inInteraction or incoming.inInteraction
+            target.awaitingFreshTouch := target.awaitingFreshTouch or incoming.awaitingFreshTouch
+            target.reactionCount := math.max(target.reactionCount, incoming.reactionCount)
+            bool targetPending = target.reactionPending
+            bool incomingPending = incoming.reactionPending
+            float targetReactionATR = target.reactionATRAtTouch
+            float incomingReactionATR = incoming.reactionATRAtTouch
+            target.reactionPending := targetPending or incomingPending
+            target.reactionATRAtTouch := targetPending and incomingPending ? math.max(targetReactionATR, incomingReactionATR) : targetPending ? targetReactionATR : incomingPending ? incomingReactionATR : na
+            target.breakCount := math.max(target.breakCount, incoming.breakCount)
+            target.birthVolumeRatio := math.max(target.birthVolumeRatio, incoming.birthVolumeRatio)
+            box.set_left(target.boxId, math.min(box.get_left(target.boxId), box.get_left(incoming.boxId)))
+            if debugStrategy
+                log.info("ZONE_MERGE | survivor=Z#{0} | absorbed=Z#{1} | role={2} | merged_zone={3}-{4} | T={5} | R={6} | B={7}",
+                    target.id, incoming.id, target.isSupport ? "SUPPORT" : "RESISTANCE",
+                    str.tostring(target.lower, format.mintick), str.tostring(target.upper, format.mintick), target.touchCount, target.reactionCount, target.breakCount)
+            box.delete(incoming.boxId)
+            updateZoneVisuals(target)
+            array.set(zones, targetIndex, target)
+            merged := true
+    merged
+
+addOrMergeZone(SRZone incoming) =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    int mergeIndex = -1
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone existing = array.get(zones, i)
+            if mergeIndex == -1 and existing.active and existing.isSupport == incoming.isSupport and zonesCloseEnough(existing, incoming, gapTolerance)
+                mergeIndex := i
+
+    bool merged = false
+    if mergeIndex >= 0
+        merged := mergeZoneAt(mergeIndex, incoming, gapTolerance)
+    else
+        updateZoneInfo(incoming)
+        array.push(zones, incoming)
+    merged
+
+mergeActiveZones() =>
+    float gapTolerance = not na(currentATR) ? currentATR * mergeGapATR : 0.0
+    bool changed = true
+    while changed
+        changed := false
+        int count = array.size(zones)
+        if count > 1
+            for i = 0 to count - 2
+                if not changed
+                    SRZone a = array.get(zones, i)
+                    if a.active
+                        for j = i + 1 to count - 1
+                            if not changed
+                                SRZone b = array.get(zones, j)
+                                if b.active and a.isSupport == b.isSupport and zonesCloseEnough(a, b, gapTolerance)
+                                    a.lower := math.min(a.lower, b.lower)
+                                    a.upper := math.max(a.upper, b.upper)
+                                    a.createdTime := math.min(a.createdTime, b.createdTime)
+                                    a.lastInteractionBar := math.max(a.lastInteractionBar, b.lastInteractionBar)
+                                    a.touchCount := math.max(a.touchCount, b.touchCount)
+                                    a.inInteraction := a.inInteraction or b.inInteraction
+                                    a.awaitingFreshTouch := a.awaitingFreshTouch or b.awaitingFreshTouch
+                                    a.reactionCount := math.max(a.reactionCount, b.reactionCount)
+                                    bool aPending = a.reactionPending
+                                    bool bPending = b.reactionPending
+                                    float aReactionATR = a.reactionATRAtTouch
+                                    float bReactionATR = b.reactionATRAtTouch
+                                    a.reactionPending := aPending or bPending
+                                    a.reactionATRAtTouch := aPending and bPending ? math.max(aReactionATR, bReactionATR) : aPending ? aReactionATR : bPending ? bReactionATR : na
+                                    a.breakCount := math.max(a.breakCount, b.breakCount)
+                                    a.birthVolumeRatio := math.max(a.birthVolumeRatio, b.birthVolumeRatio)
+                                    box.set_left(a.boxId, math.min(box.get_left(a.boxId), box.get_left(b.boxId)))
+                                    if debugStrategy
+                                        log.info("ZONE_MERGE | survivor=Z#{0} | absorbed=Z#{1} | role={2} | merged_zone={3}-{4} | T={5} | R={6} | B={7}",
+                                            a.id, b.id, a.isSupport ? "SUPPORT" : "RESISTANCE",
+                                            str.tostring(a.lower, format.mintick), str.tostring(a.upper, format.mintick), a.touchCount, a.reactionCount, a.breakCount)
+                                    box.delete(b.boxId)
+                                    updateZoneVisuals(a)
+                                    array.set(zones, i, a)
+                                    array.remove(zones, j)
+                                    changed := true
+
+// -----------------------------------------------------------------------------
+// Zone creation
+// -----------------------------------------------------------------------------
+createSupportZone(float pivotPrice, int zoneId) =>
+    float lower = pivotPrice
+    float upper = pivotPrice + pivotATR * zoneMultiplier
+    box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = supportBg, border_color = supportBorder)
+    bool bornInteracting = high >= lower and low <= upper
+    SRZone zone = SRZone.new(zoneId, lower, upper, true, true, pivotTime, zoneBarCounter, 0, bornInteracting, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    if debugStrategy
+        log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
+    addOrMergeZone(zone)
+
+createResistanceZone(float pivotPrice, int zoneId) =>
+    float upper = pivotPrice
+    float lower = pivotPrice - pivotATR * zoneMultiplier
+    box zoneBox = box.new(left = pivotTime, top = upper, right = zoneBarCloseTime, bottom = lower, xloc = xloc.bar_time, extend = extend.right, bgcolor = resistBg, border_color = resistBorder)
+    bool bornInteracting = high >= lower and low <= upper
+    SRZone zone = SRZone.new(zoneId, lower, upper, false, true, pivotTime, zoneBarCounter, 0, bornInteracting, false, 0, false, na, 0, birthVolumeRatio, na, na, zoneBox)
+    if debugStrategy
+        log.info("ZONE_BIRTH | Z#{0} | role={1} | zone={2}-{3} | volumeRatio={4}", zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), str.tostring(zone.birthVolumeRatio, "#.##"))
+    addOrMergeZone(zone)
+
+// -----------------------------------------------------------------------------
+// Zone engine
+//
+// ZTF owns zone birth, same-role merging, ATR scale, and staleness aging.
+// CTF owns price interactions: touch episodes, reactions, breaks, role flips,
+// and max-break freezes. This keeps trade interaction state on the execution
+// timeframe while preserving the zone's higher-timeframe construction/aging.
+// -----------------------------------------------------------------------------
+
+// ZTF construction and aging: once per completed ZTF bar.
+if processZoneBar
+    zoneBarCounter += 1
+
+    if volumeQualified and atrReady
+        if not na(pivotLow)
+            createSupportZone(pivotLow, nextZoneId)
+            nextZoneId += 1
+        if not na(pivotHigh)
+            createResistanceZone(pivotHigh, nextZoneId)
+            nextZoneId += 1
+
+    // Merging belongs to ZTF only, including zones whose roles flipped on CTF.
+    mergeActiveZones()
+
+    // Staleness remains ZTF-based. CTF interactions stamp the current ZTF
+    // counter into lastInteractionBar, but aging advances only here.
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone zone = array.get(zones, i)
+            if zone.active
+                float distanceFromZone = zoneClose > zone.upper ? zoneClose - zone.upper : zoneClose < zone.lower ? zone.lower - zoneClose : 0.0
+                int ageBars = zoneBarCounter - zone.lastInteractionBar
+                float distanceATR = not na(currentATR) and currentATR > 0 ? distanceFromZone / currentATR : na
+                bool oldEnough = ageBars > staleBars
+                bool farEnough = not na(distanceATR) and distanceATR > staleDistanceATR
+                if oldEnough and farEnough
+                    if debugStrategy
+                        log.info("ZONE_FREEZE | Z#{0} | reason=STALE | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | age={7} | distanceATR={8}",
+                            zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            zone.touchCount, zone.reactionCount, zone.breakCount, ageBars, str.tostring(distanceATR, "#.##"))
+                    zone := freezeZone(zone, ageBars, distanceATR, zoneBarCloseTime)
+                    array.set(zones, i, zone)
+
+    int maxStoredZones = 450
+    if array.size(zones) > maxStoredZones
+        SRZone oldest = array.shift(zones)
+        box.delete(oldest.boxId)
+
+// CTF interaction lifecycle: evaluate every confirmed chart bar.
+// Strategy arming consumes only touch episodes that BEGIN on this bar.
+array<int> newTouchZoneIds = array.new_int()
+array<int> newTouchCounts = array.new_int()
+
+if validTimeframes and barstate.isconfirmed and array.size(zones) > 0
+    for i = 0 to array.size(zones) - 1
+        SRZone zone = array.get(zones, i)
+
+        if zone.active
+            float breakTolerance = currentATR * breakToleranceATR
+            bool broken = not na(currentATR) and (zone.isSupport ? close < zone.lower - breakTolerance : close > zone.upper + breakTolerance)
+
+            if broken
+                zone.inInteraction := false
+                zone.awaitingFreshTouch := true
+                zone.reactionPending := false
+                zone.reactionATRAtTouch := na
+                zone.breakCount += 1
+                zone.lastInteractionBar := zoneBarCounter
+
+                if debugStrategy
+                    log.info("ZONE_BREAK | Z#{0} | old_role={1} | zone={2}-{3} | T={4} | R={5} | B={6}/{7} | CTF_close={8} | tolerance={9}",
+                        zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                        zone.touchCount, zone.reactionCount, zone.breakCount, maxBreaks, str.tostring(close, format.mintick), str.tostring(breakTolerance, format.mintick))
+                if zone.breakCount >= maxBreaks
+                    if debugStrategy
+                        log.info("ZONE_FREEZE | Z#{0} | reason=MAX_BREAKS | role={1} | zone={2}-{3} | T={4} | R={5} | B={6}",
+                            zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                            zone.touchCount, zone.reactionCount, zone.breakCount)
+                    zone := freezeZone(zone, na, na, time_close)
+                else
+                    bool oldRoleSupport = zone.isSupport
+                    zone.isSupport := not zone.isSupport
+                    if debugStrategy
+                        log.info("ZONE_ROLE_FLIP | Z#{0} | from={1} | to={2} | zone={3}-{4} | T={5} | R={6} | B={7}",
+                            zone.id, oldRoleSupport ? "SUPPORT" : "RESISTANCE", zone.isSupport ? "SUPPORT" : "RESISTANCE",
+                            str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount)
+                    updateZoneVisuals(zone)
+            else
+                bool interacting = high >= zone.lower and low <= zone.upper
+
+                if zone.awaitingFreshTouch
+                    // After a break/role flip, the breaking interaction cannot
+                    // immediately become a setup in the new role. Require one
+                    // fully outside CTF bar before a later re-entry can start
+                    // the next touch episode.
+                    if not interacting
+                        zone.awaitingFreshTouch := false
+                        zone.inInteraction := false
+                else if interacting
+                    zone.lastInteractionBar := zoneBarCounter
+                    if not zone.inInteraction
+                        zone.inInteraction := true
+                        zone.touchCount += 1
+                        array.push(newTouchZoneIds, zone.id)
+                        array.push(newTouchCounts, zone.touchCount)
+                        zone.reactionPending := not na(currentATR)
+                        zone.reactionATRAtTouch := currentATR
+                        if debugStrategy
+                            log.info("ZONE_TOUCH | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}",
+                                zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone),
+                                str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+                        updateZoneInfo(zone)
+                else
+                    // One fully outside completed CTF bar ends the touch episode.
+                    zone.inInteraction := false
+
+                    if zone.reactionPending and not na(zone.reactionATRAtTouch)
+                        float requiredMove = zone.reactionATRAtTouch * reactionATR
+                        bool reacted = zone.isSupport ? high >= zone.upper + requiredMove : low <= zone.lower - requiredMove
+                        if reacted
+                            zone.reactionCount += 1
+                            if debugStrategy
+                                log.info("ZONE_REACTION | Z#{0} | role={1} | zone={2}-{3} | T={4} | R={5} | B={6} | requiredMove={7} | CTF H/L/C={8}/{9}/{10}",
+                                    zone.id, zone.isSupport ? "SUPPORT" : "RESISTANCE", str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick),
+                                    zone.touchCount, zone.reactionCount, zone.breakCount, str.tostring(requiredMove, format.mintick),
+                                    str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+                            zone.reactionPending := false
+                            zone.reactionATRAtTouch := na
+                            updateZoneInfo(zone)
+
+            array.set(zones, i, zone)
+
+// -----------------------------------------------------------------------------
+// Strategy setup lifecycle helpers
+// -----------------------------------------------------------------------------
+setupOpportunityKey(int zoneId, int touchCount) =>
+    str.tostring(zoneId) + ":" + str.tostring(touchCount)
+
+setupOpportunityConsumed(array<string> consumed, int zoneId, int touchCount) =>
+    array.includes(consumed, setupOpportunityKey(zoneId, touchCount))
+
+consumeSetupOpportunity(array<string> consumed, int zoneId, int touchCount) =>
+    string key = setupOpportunityKey(zoneId, touchCount)
+    if not array.includes(consumed, key)
+        array.push(consumed, key)
+
+setupZoneStillValid(int setupZoneId, int setupTouchCount, bool requireSupport) =>
+    bool valid = false
+    if not na(setupZoneId) and not na(setupTouchCount) and array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone zone = array.get(zones, i)
+            if zone.id == setupZoneId
+                valid := zone.active and zone.isSupport == requireSupport and zone.touchCount == setupTouchCount
+                break
+    valid
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Strategy v1
+//
+// Entry confirmation is intentionally evaluated on the chart timeframe (CTF):
+// price must interact with a direction-compatible active ZTF zone and then
+// close back through the favorable boundary. Stops/targets are frozen at entry.
+// -----------------------------------------------------------------------------
+var bool longSetupPending = false
+var bool shortSetupPending = false
+var float longSetupLower = na
+var float longSetupUpper = na
+var float shortSetupLower = na
+var float shortSetupUpper = na
+var float longSetupATR = na
+var float shortSetupATR = na
+var int longSetupZoneId = na
+var int shortSetupZoneId = na
+var int longSetupTouchCount = na
+var int shortSetupTouchCount = na
+var float activeEntryPrice = na
+var float activeInitialRisk = na
+var float activeStopPrice = na
+var float activeTargetPrice = na
+var int activeEntryBar = na
+var int nextTradeId = 1
+var int activeTradeId = na
+var int activeTradeZoneId = na
+var int activeTradeTouchCount = na
+var bool orderPendingFill = false
+var bool pendingOrderIsLong = false
+var int pendingOrderZoneId = na
+var int pendingOrderTouchCount = na
+var float pendingOrderEntryPrice = na
+var float pendingOrderInitialRisk = na
+var float pendingOrderStopPrice = na
+var float pendingOrderTargetPrice = na
+var int pendingOrderSignalBar = na
+var array<string> consumedLongOpportunities = array.new_string()
+var array<string> consumedShortOpportunities = array.new_string()
+
+if validTimeframes and strategy.position_size == 0 and strategy.position_size[1] == 0
+    // Arm a setup from the first matching active zone touched on this CTF bar.
+    if array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            SRZone zone = array.get(zones, i)
+            if zone.active
+                bool freshTouchAvailable = false
+                if array.size(newTouchZoneIds) > 0
+                    for touchIndex = 0 to array.size(newTouchZoneIds) - 1
+                        if array.get(newTouchZoneIds, touchIndex) == zone.id and array.get(newTouchCounts, touchIndex) == zone.touchCount
+                            freshTouchAvailable := true
+                            break
+                if allowLong and (structureState == 1 or (tradeNeutralStructure and structureState == 0)) and zone.isSupport and freshTouchAvailable and not longSetupPending and not setupOpportunityConsumed(consumedLongOpportunities, zone.id, zone.touchCount)
+                    longSetupPending := true
+                    longSetupLower := zone.lower
+                    longSetupUpper := zone.upper
+                    longSetupATR := currentATR
+                    longSetupZoneId := zone.id
+                    longSetupTouchCount := zone.touchCount
+                    if debugStrategy
+                        log.info("ARM_LONG | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+                if allowShort and (structureState == -1 or (tradeNeutralStructure and structureState == 0)) and not zone.isSupport and freshTouchAvailable and not shortSetupPending and not setupOpportunityConsumed(consumedShortOpportunities, zone.id, zone.touchCount)
+                    shortSetupPending := true
+                    shortSetupLower := zone.lower
+                    shortSetupUpper := zone.upper
+                    shortSetupATR := currentATR
+                    shortSetupZoneId := zone.id
+                    shortSetupTouchCount := zone.touchCount
+                    if debugStrategy
+                        log.info("ARM_SHORT | Z#{0} | STF={1} | zone={2}-{3} | T={4} | R={5} | B={6} | strength={7} | CTF O/H/L/C={8}/{9}/{10}/{11} | ZTF_ATR={12}", zone.id, structureStateText(structureState), str.tostring(zone.lower, format.mintick), str.tostring(zone.upper, format.mintick), zone.touchCount, zone.reactionCount, zone.breakCount, zoneStrengthState(zone), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick), str.tostring(currentATR, format.mintick))
+
+    // A setup belongs to one specific zone interaction. If that source zone
+    // breaks, flips, freezes, merges away, or advances to another touch episode
+    // before entry, the old setup is no longer valid.
+    if longSetupPending and not setupZoneStillValid(longSetupZoneId, longSetupTouchCount, true)
+        if debugStrategy
+            log.info("CANCEL_LONG | Z#{0} | reason=ZONE_INVALIDATED | touch={1}", longSetupZoneId, longSetupTouchCount)
+        longSetupPending := false
+    if shortSetupPending and not setupZoneStillValid(shortSetupZoneId, shortSetupTouchCount, false)
+        if debugStrategy
+            log.info("CANCEL_SHORT | Z#{0} | reason=ZONE_INVALIDATED | touch={1}", shortSetupZoneId, shortSetupTouchCount)
+        shortSetupPending := false
+
+    // A pending setup is cancelled if STF no longer permits its direction.
+    bool longStructureAllowed = structureState == 1 or (tradeNeutralStructure and structureState == 0)
+    bool shortStructureAllowed = structureState == -1 or (tradeNeutralStructure and structureState == 0)
+    if longSetupPending and not longStructureAllowed
+        if debugStrategy
+            log.info("CANCEL_LONG | Z#{0} | reason=STF | STF={1} | pending_zone={2}-{3} | CTF_close={4}", longSetupZoneId, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(close, format.mintick))
+        longSetupPending := false
+    if shortSetupPending and not shortStructureAllowed
+        if debugStrategy
+            log.info("CANCEL_SHORT | Z#{0} | reason=STF | STF={1} | pending_zone={2}-{3} | CTF_close={4}", shortSetupZoneId, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(close, format.mintick))
+        shortSetupPending := false
+
+    bool immediateEntry = entryMode == "Immediate zone interaction"
+    bool longSignal = allowLong and longSetupPending and (immediateEntry or close > longSetupUpper)
+    bool shortSignal = allowShort and shortSetupPending and (immediateEntry or close < shortSetupLower)
+
+    if longSignal and not na(longSetupATR)
+        float entryPrice = close
+        float stopPrice = longSetupLower - longSetupATR * stopBufferATR
+        float risk = entryPrice - stopPrice
+        if risk > syminfo.mintick
+            float minimumTarget = entryPrice + risk * minimumRewardR
+            float targetPrice = minimumTarget
+            float nearestResistance = na
+            if array.size(zones) > 0
+                for i = 0 to array.size(zones) - 1
+                    SRZone targetZone = array.get(zones, i)
+                    if targetZone.active and not targetZone.isSupport and targetZone.lower >= minimumTarget
+                        nearestResistance := na(nearestResistance) ? targetZone.lower : math.min(nearestResistance, targetZone.lower)
+            if not na(nearestResistance)
+                targetPrice := nearestResistance
+            if maximumRewardEnabled
+                float maximumTarget = entryPrice + risk * math.max(maximumRewardR, minimumRewardR)
+                targetPrice := math.min(targetPrice, maximumTarget)
+            orderPendingFill := true
+            pendingOrderIsLong := true
+            pendingOrderZoneId := longSetupZoneId
+            pendingOrderTouchCount := longSetupTouchCount
+            pendingOrderEntryPrice := entryPrice
+            pendingOrderInitialRisk := risk
+            pendingOrderStopPrice := stopPrice
+            pendingOrderTargetPrice := targetPrice
+            pendingOrderSignalBar := bar_index
+            if debugStrategy
+                log.info("ORDER_LONG | Z#{0} | touch={1} | STF={2} | setup_zone={3}-{4} | signal_close={5} | SL={6} | TP={7} | risk={8} | rewardR={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", pendingOrderZoneId, pendingOrderTouchCount, structureStateText(structureState), str.tostring(longSetupLower, format.mintick), str.tostring(longSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((targetPrice - entryPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+            strategy.entry("Long", strategy.long)
+        longSetupPending := false
+        shortSetupPending := false
+
+    if shortSignal and not na(shortSetupATR) and strategy.position_size == 0
+        float entryPrice = close
+        float stopPrice = shortSetupUpper + shortSetupATR * stopBufferATR
+        float risk = stopPrice - entryPrice
+        if risk > syminfo.mintick
+            float minimumTarget = entryPrice - risk * minimumRewardR
+            float targetPrice = minimumTarget
+            float nearestSupport = na
+            if array.size(zones) > 0
+                for i = 0 to array.size(zones) - 1
+                    SRZone targetZone = array.get(zones, i)
+                    if targetZone.active and targetZone.isSupport and targetZone.upper <= minimumTarget
+                        nearestSupport := na(nearestSupport) ? targetZone.upper : math.max(nearestSupport, targetZone.upper)
+            if not na(nearestSupport)
+                targetPrice := nearestSupport
+            if maximumRewardEnabled
+                float maximumTarget = entryPrice - risk * math.max(maximumRewardR, minimumRewardR)
+                targetPrice := math.max(targetPrice, maximumTarget)
+            orderPendingFill := true
+            pendingOrderIsLong := false
+            pendingOrderZoneId := shortSetupZoneId
+            pendingOrderTouchCount := shortSetupTouchCount
+            pendingOrderEntryPrice := entryPrice
+            pendingOrderInitialRisk := risk
+            pendingOrderStopPrice := stopPrice
+            pendingOrderTargetPrice := targetPrice
+            pendingOrderSignalBar := bar_index
+            if debugStrategy
+                log.info("ORDER_SHORT | Z#{0} | touch={1} | STF={2} | setup_zone={3}-{4} | signal_close={5} | SL={6} | TP={7} | risk={8} | rewardR={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", pendingOrderZoneId, pendingOrderTouchCount, structureStateText(structureState), str.tostring(shortSetupLower, format.mintick), str.tostring(shortSetupUpper, format.mintick), str.tostring(entryPrice, format.mintick), str.tostring(stopPrice, format.mintick), str.tostring(targetPrice, format.mintick), str.tostring(risk, format.mintick), str.tostring((entryPrice - targetPrice) / risk, "#.##"), str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+            strategy.entry("Short", strategy.short)
+        longSetupPending := false
+        shortSetupPending := false
+else
+    // Never carry a pending setup through an active trade or its exit transition.
+    // A new setup must be armed from fresh flat-state price interaction.
+    if longSetupPending and debugStrategy
+        log.info("CANCEL_LONG | Z#{0} | reason=POSITION_LIFECYCLE | touch={1}", longSetupZoneId, longSetupTouchCount)
+    if shortSetupPending and debugStrategy
+        log.info("CANCEL_SHORT | Z#{0} | reason=POSITION_LIFECYCLE | touch={1}", shortSetupZoneId, shortSetupTouchCount)
+    longSetupPending := false
+    shortSetupPending := false
+
+// Confirm actual fills from TradingView's broker-emulator position transition.
+// Trade IDs and consumed opportunities belong to real positions, not order submissions.
+if strategy.position_size != 0 and strategy.position_size[1] == 0 and orderPendingFill
+    bool filledLong = strategy.position_size > 0
+    if filledLong == pendingOrderIsLong
+        activeTradeId := nextTradeId
+        nextTradeId += 1
+        activeTradeZoneId := pendingOrderZoneId
+        activeTradeTouchCount := pendingOrderTouchCount
+        activeEntryPrice := strategy.position_avg_price
+        activeInitialRisk := pendingOrderInitialRisk
+        activeStopPrice := pendingOrderStopPrice
+        activeTargetPrice := pendingOrderTargetPrice
+        activeEntryBar := bar_index
+        if filledLong
+            consumeSetupOpportunity(consumedLongOpportunities, activeTradeZoneId, activeTradeTouchCount)
+        else
+            consumeSetupOpportunity(consumedShortOpportunities, activeTradeZoneId, activeTradeTouchCount)
+        if debugStrategy
+            log.info("ENTER_{0} | Trade#{1} | Z#{2} | touch={3} | fill={4} | SL={5} | TP={6} | risk={7} | signal_bar={8} | fill_bar={9}", filledLong ? "LONG" : "SHORT", activeTradeId, activeTradeZoneId, activeTradeTouchCount, str.tostring(activeEntryPrice, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), str.tostring(activeInitialRisk, format.mintick), pendingOrderSignalBar, bar_index)
+    orderPendingFill := false
+    pendingOrderZoneId := na
+    pendingOrderTouchCount := na
+    pendingOrderEntryPrice := na
+    pendingOrderInitialRisk := na
+    pendingOrderStopPrice := na
+    pendingOrderTargetPrice := na
+    pendingOrderSignalBar := na
+
+// Protect a just-filled position immediately using the snapshotted order levels.
+if strategy.position_size > 0 and not na(activeStopPrice) and not na(activeTargetPrice)
+    strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
+else if strategy.position_size < 0 and not na(activeStopPrice) and not na(activeTargetPrice)
+    strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
+
+// // Optional breakeven management. Disabled by default so adding the feature does
+// not change the current baseline backtest until explicitly enabled.
+if strategy.position_size > 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
+    if breakevenEnabled and high >= activeEntryPrice + activeInitialRisk * breakevenTriggerR
+        activeStopPrice := math.max(activeStopPrice, activeEntryPrice)
+    strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
+else if strategy.position_size < 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
+    if breakevenEnabled and low <= activeEntryPrice - activeInitialRisk * breakevenTriggerR
+        activeStopPrice := math.min(activeStopPrice, activeEntryPrice)
+    strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    if debugStrategy and not na(activeEntryPrice) and not na(activeStopPrice) and not na(activeTargetPrice)
+        bool wasLong = strategy.position_size[1] > 0
+        float exitReference = close
+        string exitReason = wasLong ? (low <= activeStopPrice ? "SL" : high >= activeTargetPrice ? "TP" : "EXIT") : (high >= activeStopPrice ? "SL" : low <= activeTargetPrice ? "TP" : "EXIT")
+        log.info("CLOSE_{0} | Trade#{1} | Z#{2} | touch={3} | reason={4} | entry={5} | exit_bar_close={6} | SL={7} | TP={8} | bars={9} | CTF O/H/L/C={10}/{11}/{12}/{13}", wasLong ? "LONG" : "SHORT", activeTradeId, activeTradeZoneId, activeTradeTouchCount, exitReason, str.tostring(activeEntryPrice, format.mintick), str.tostring(exitReference, format.mintick), str.tostring(activeStopPrice, format.mintick), str.tostring(activeTargetPrice, format.mintick), na(activeEntryBar) ? na : bar_index - activeEntryBar, str.tostring(open, format.mintick), str.tostring(high, format.mintick), str.tostring(low, format.mintick), str.tostring(close, format.mintick))
+    activeEntryPrice := na
+    activeInitialRisk := na
+    activeStopPrice := na
+    activeTargetPrice := na
+    activeEntryBar := na
+    activeTradeId := na
+    activeTradeZoneId := na
+    activeTradeTouchCount := na
+
+// -----------------------------------------------------------------------------
+// Context / validation panel
+// -----------------------------------------------------------------------------
+var table contextPanel = table.new(position.top_right, 2, 5, border_width = 1)
+
+if barstate.islast
+    if showContextPanel
+        table.cell(contextPanel, 0, 0, "CTF")
+        table.cell(contextPanel, 1, 0, timeframe.period)
+        table.cell(contextPanel, 0, 1, "ZTF")
+        table.cell(contextPanel, 1, 1, zoneTf)
+        table.cell(contextPanel, 0, 2, "STF")
+        table.cell(contextPanel, 1, 2, structureTf)
+
+        if validTimeframes
+            table.cell(contextPanel, 0, 3, "Structure")
+            table.cell(contextPanel, 1, 3, structureStateText(structureState))
+            table.cell(contextPanel, 0, 4, "TF rule")
+            table.cell(contextPanel, 1, 4, "STF > ZTF >= CTF")
+        else
+            string validationMessage = comparableTimeframes ? "INVALID: STF > ZTF >= CTF" : "INVALID / unsupported chart TF"
+            table.cell(contextPanel, 0, 3, "Timeframes")
+            table.cell(contextPanel, 1, 3, validationMessage)
+            table.cell(contextPanel, 0, 4, "Status")
+            table.cell(contextPanel, 1, 4, "Calculations disabled")
+    else
+        table.clear(contextPanel, 0, 0, 1, 4)
