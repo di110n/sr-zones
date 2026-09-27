@@ -80,11 +80,23 @@ This project intentionally handles several state-management cases that simple S/
 
 ## Screenshots
 
-The final portfolio set uses three views:
+### Indicator overview
 
-1. **Indicator overview** — dynamic support/resistance zones with lifetime T/R/B evidence, strength classification, frozen history, and timeframe/structure context.
-2. **Strategy execution** — zone-driven entries and exits on the chart together with TradingView's trade list.
-3. **Backtest overview** — Strategy Tester performance for one historical configuration; shown as implementation evidence, not an expected-return claim.
+Dynamic support/resistance zones with lifetime T/R/B evidence, strength classification, frozen history, and timeframe/structure context.
+
+![Dynamic S/R Zones indicator overview](images/indicator-overview.png)
+
+### Strategy execution
+
+Zone-driven entries and exits on the chart together with TradingView's trade history.
+
+![Dynamic S/R Zones strategy execution](images/strategy-execution.png)
+
+### Backtest overview
+
+TradingView Strategy Tester results for one historical configuration. This screenshot demonstrates the backtesting implementation; it is not an expected-return claim.
+
+![Dynamic S/R Zones Strategy Tester example](images/strategy-backtest.png)
 
 ## License
 
