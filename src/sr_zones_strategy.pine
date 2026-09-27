@@ -90,7 +90,7 @@ zoneTextColor = color.black
 // That makes the data available from the first chart bar of the next requested
 // timeframe period without leaking information from an unfinished HTF candle.
 // -----------------------------------------------------------------------------
-[zoneBarTime, zoneBarCloseTime, zoneHigh, zoneLow, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] = request.security(
+[zoneBarTime, zoneBarCloseTime, _, _, zoneClose, zoneATR, pivotHigh, pivotLow, pivotTime, pivotVolume, priorVolumeMA, pivotATR] = request.security(
         syminfo.tickerid,
         zoneTf,
         [
@@ -549,7 +549,6 @@ var bool orderPendingFill = false
 var bool pendingOrderIsLong = false
 var int pendingOrderZoneId = na
 var int pendingOrderTouchCount = na
-var float pendingOrderEntryPrice = na
 var float pendingOrderInitialRisk = na
 var float pendingOrderStopPrice = na
 var float pendingOrderTargetPrice = na
@@ -638,7 +637,6 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             pendingOrderIsLong := true
             pendingOrderZoneId := longSetupZoneId
             pendingOrderTouchCount := longSetupTouchCount
-            pendingOrderEntryPrice := entryPrice
             pendingOrderInitialRisk := risk
             pendingOrderStopPrice := stopPrice
             pendingOrderTargetPrice := targetPrice
@@ -671,7 +669,6 @@ if validTimeframes and strategy.position_size == 0 and strategy.position_size[1]
             pendingOrderIsLong := false
             pendingOrderZoneId := shortSetupZoneId
             pendingOrderTouchCount := shortSetupTouchCount
-            pendingOrderEntryPrice := entryPrice
             pendingOrderInitialRisk := risk
             pendingOrderStopPrice := stopPrice
             pendingOrderTargetPrice := targetPrice
@@ -714,19 +711,12 @@ if strategy.position_size != 0 and strategy.position_size[1] == 0 and orderPendi
     orderPendingFill := false
     pendingOrderZoneId := na
     pendingOrderTouchCount := na
-    pendingOrderEntryPrice := na
     pendingOrderInitialRisk := na
     pendingOrderStopPrice := na
     pendingOrderTargetPrice := na
     pendingOrderSignalBar := na
 
-// Protect a just-filled position immediately using the snapshotted order levels.
-if strategy.position_size > 0 and not na(activeStopPrice) and not na(activeTargetPrice)
-    strategy.exit("Long Exit", "Long", stop = activeStopPrice, limit = activeTargetPrice)
-else if strategy.position_size < 0 and not na(activeStopPrice) and not na(activeTargetPrice)
-    strategy.exit("Short Exit", "Short", stop = activeStopPrice, limit = activeTargetPrice)
-
-// // Optional breakeven management. Disabled by default so adding the feature does
+// Optional breakeven management. Disabled by default so adding the feature does
 // not change the current baseline backtest until explicitly enabled.
 if strategy.position_size > 0 and not na(activeEntryPrice) and not na(activeInitialRisk) and not na(activeTargetPrice)
     if breakevenEnabled and high >= activeEntryPrice + activeInitialRisk * breakevenTriggerR
